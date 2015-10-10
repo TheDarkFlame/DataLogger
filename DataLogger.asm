@@ -7,9 +7,9 @@
 ;    Company:                                                                  *
 ;    Description:                                                              *
 ;    Pin config: RC<0:7>    =LCD D<0:7>	(datapins)                             *          
-;		 RB4	    =LCD RS	(reg select)			       *	           
-;		 RB5	    =LCD R/W	(write/read)			       *		           
-;		 RB6	    =LCD E	(enable)			       *
+;		 RB4	    =LCD RS	(reg select data=1 command=0)	       *	           
+;		 RB5	    =LCD R/W	(write=1/read=0)		       *		           
+;		 RB6	    =LCD E	(enable=1)			       *
 ;*******************************************************************************
 #include "p16F690.inc"
 
@@ -56,11 +56,22 @@ delay_10_ms macro
 ;-------------------------------------------------------------------------------
 test_busy_flag macro
     ;waits until busy flag is cleared
+    ;outputs: MCU = bank0; LCD= read mode & data mode
     BANKSEL TRISC
     BSF TRISC,7			    ;set RC7 as input to test busy flag
     BANKSEL PORTC
+    BSF PORTB,5			    ;set to read mode
+    BCF PORTB,4			    ;set to command mode
+    
+    BSF PORTB,6			    ;pulse enable bit
+    nop
+    BCF PORTB,6
+    
     BTFSC PORTC,7		    ;test busy flag until cleared
     GOTO $-1
+    
+    BCF	PORTB,5			    ;set back to write mode
+    BSF PORTB,4			    ;set back to data mode
     BANKSEL TRISC
     BCF TRISC,7			    ;set RC7 as output
     BANKSEL PORTB
@@ -83,24 +94,29 @@ SETUP
 ;		 RB4	    =LCD RS	(reg select)					           
 ;		 RB5	    =LCD R/W	(write/read)					           
 ;		 RB6	    =LCD E	(enable)					       
-    
     BANKSEL TRISC
     CLRF TRISC			    ;set PORTC as output
     BANKSEL TRISB
     CLRF TRISB			    ;set PORTB as output
     
-    test_busy_flag    
+    BANKSEL PORTC
+    CLRF PORTC			    ;set default state
+    CLRF PORTB			    ;set default state
     
-    BANKSEL PORTB
-    BCF PORTB,5			    ;set LCD to write mode
+    test_busy_flag    
     BCF PORTB,4			    ;set LCD to command mode
     MOVLW b'0000100'		    ;00001DBC Display=on Blinking=off Cursor=off
+    MOVFW PORTC
     BSF PORTB,6			    ;toggle the enable bit with a delay
-    test_busy_flag
+    nop
     BCF PORTB,6
+    
+    test_busy_flag    
+    BCF PORTB,4			    ;set LCD to command mode
     MOVLW b'00111000'		    ;001DNFxx D(8bit)=1 N(2line)=1 F(5x11 or 5x8)=0
+    MOVFW PORTC
     BSF PORTB,6			    ;toggle the enable bit with a delay
-    test_busy_flag
+    nop
     BCF PORTB,6
 ;-------------------------------------------------------------------------------
  
@@ -355,11 +371,10 @@ lcd.write
 
     test_busy_flag
     
-    BSF PORTB,4	    ;select transfer display data
     MOVFW LCD_BUFFER
     MOVWF PORTC	    ;output data to LCD
     BSF PORTB,6	    ;toggle enable on
-    test_busy_flag
+    nop
     BCF PORTB,7	    ;toggle enable off
     
     RETURN
