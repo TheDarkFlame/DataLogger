@@ -6,8 +6,10 @@
 ;    Author:                                                                   *
 ;    Company:                                                                  *
 ;    Description:                                                              *
-;    Pin config: RC0(AN4)=temperature                                               *
-;		 RC1(AN5)=humidity						       *    
+;    Pin config: RC0-8<out>=LCD dataout                                        *
+;		 RB4<out>  =LCD RS					       *    
+;		 RB5<out>  =LCD R/W					       *    
+;		 RB6<out>  =LCD E					       *    
 ;*******************************************************************************
 #include "p16F690.inc"
 
@@ -23,13 +25,50 @@ CUR_TIME_L  res 1	    ;stores minutes we are currently working with
 CUR_TIME_H  res	1	    ;stores hours we are currently working with
 LOG_COUNT   res 1	    ;number of logs we have in memory (63 max)
 STATE	res 1		    ;state register
+LCD_BUFFER res 1	    ;stores whatever we want to put on the LCD right now
 ;-------x		    ;mode bit 1=playback 0=display
 ;------x-		    ;button_up state 0=released 1=pressed
 ;-----x--		    ;button_up state 0=released 1=pressed
+D1  res 1		    ;delay register 1
+D2  res 1		    ;delay resgiter 2
 RES_VECT  CODE    0x0000            ; processor reset vector
     GOTO    SETUP                   ; go to beginning of program
 
+;*******************************************************************************
+; MACROS
+;*******************************************************************************
 
+;-------------------------------------------------------------------------------    
+delay_10_ms macro
+    ;goto=2 cyles, decfsz=1 cycle, if zero=2 cycles
+    MOVLW .40
+    MOVWF D2
+
+;if innerloopnumber=82, total cycles=10082, which is close enough to 10ms
+    MOVLW .83	;approx 1/4 ms
+    MOVWF D1	
+    
+    DECFSZ D1,F	;count until D1=0
+    GOTO $-1	;keep counting down until
+    DECFSZ D2,F	;D1=0, so count down D2, and reset D1 until D2=0
+    GOTO $-4	;reset D1
+    ENDM
+;-------------------------------------------------------------------------------
+test_busy_flag macro
+    ;waits until busy flag is cleared
+    BANKSEL TRISC
+    BSF TRISC,7			    ;set RC7 as input to test busy flag
+    BANKSEL PORTC
+    BTFSC PORTC,7		    ;test busy flag until cleared
+    GOTO $-1
+    BANKSEL TRISC
+    BCF TRISC,7			    ;set RC7 as output
+    BANKSEL PORTB
+    ENDM
+;-------------------------------------------------------------------------------
+
+;###END#OF#MACROS###
+    
 ;*******************************************************************************
 ; MAIN PROGRAM
 ;*******************************************************************************
@@ -37,24 +76,60 @@ RES_VECT  CODE    0x0000            ; processor reset vector
 MAIN_PROG CODE                      ; let linker place main program
 SETUP
  
+;-------------------------------------------------------------------------------
+;LCD setup
+;-------------------------------------------------------------------------------
+;    Pin config: RC0-8<out>=LCD dataout                                        
+;		 RB4<out>  =LCD RS					           
+;		 RB5<out>  =LCD R/W					           
+;		 RB6<out>  =LCD E					       
+    
+    BANKSEL TRISC
+    CLRF TRISC			    ;set PORTC as output
+    BANKSEL TRISB
+    CLRF TRISB			    ;set PORTB as output
+    
+    test_busy_flag    
+    
+    BANKSEL PORTB
+    BCF PORTB,5			    ;set LCD to write mode
+    BCF PORTB,4			    ;set LCD to command mode
+    MOVLW b'0000100'		    ;00001DBC Display=on Blinking=off Cursor=off
+    BSF PORTB,6			    ;toggle the enable bit with a delay
+    nop
+    nop
+    nop
+    nop
+    nop
+    BCF PORTB,6
+    MOVLW b'00111000'		    ;001DNFxx D(8bit)=1 N(2line)=1 F(5x11 or 5x8)=0
+    BSF PORTB,6			    ;toggle the enable bit with a delay
+    nop
+    nop
+    nop
+    nop
+    nop
+    BCF PORTB,6
+;-------------------------------------------------------------------------------
+ 
  ;=============ADC config================
     ;most code here is based on the datasheet's example code
     BANKSEL ADCON1
     MOVLW b'0111000'			;configure conversion speed
     MOVWF ADCON1
-
-    BANKSEL TRISC
-    BSF TRISC,0				;set RC0 to input
-    BSF TRISC,1				;set RC1 to input
-
-    BANKSEL ANSEL
-    BSF ANSEL,4				;set RC0(AN4) to analog
-    BSF ANSEL,5				;set RC1(AN5) to analog
-   ;==================END=ADC=config======== 
+    
+;==================END=ADC=config======== 
  
+    ;delay by 50ms for the LCD to initialize
+    
+    
 START
-    CALL SampleData
-    BTFSS STATE,0		    ; are we in playback mode
+    MOVLW .97
+    MOVWF LCD_BUFFER
+    CALL lcd.write
+   
+;    CALL SampleData
+;    BTFSS STATE,0		    ; are we in playback mode
     ;delay by 10ms
     GOTO START
 
@@ -62,7 +137,7 @@ START
 ;*******************************************************************************
 ; EEPROM.write 
 ;*******************************************************************************
-Eeprom.write
+eeprom.write
     BCF INTCON, GIE ;disable interrupts
     ;EEDATA structure:
     ;0->251 =	log
@@ -234,7 +309,7 @@ Eeprom.write
 ;*******************************************************************************
 ; sample data - covers data sampling, and display updating if required 
 ;*******************************************************************************
-SampleData
+sampledata
     
 ;--------------------------------
 ;sample temperature
@@ -279,5 +354,20 @@ SampleData
     RETURN
 ;###END#OF#CALL###
     
+;*******************************************************************************
+; LCD write function - writes data in LCD_BUFFER to the LCD 
+;*******************************************************************************
+lcd.write
+
+    test_busy_flag
     
+    BSF PORTB,4	    ;select transfer display data
+    MOVFW LCD_BUFFER
+    MOVWF PORTC	    ;output data to LCD
+    BSF PORTB,6	    ;toggle enable on
+    nop		    ;delay so LCD can read in the values
+    BCF PORTB,7	    ;toggle enable off
+    
+    RETURN
+;###END#OF#CALL###
     END
