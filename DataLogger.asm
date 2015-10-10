@@ -6,10 +6,10 @@
 ;    Author:                                                                   *
 ;    Company:                                                                  *
 ;    Description:                                                              *
-;    Pin config: RC0-8<out>=LCD dataout                                        *
-;		 RB4<out>  =LCD RS					       *    
-;		 RB5<out>  =LCD R/W					       *    
-;		 RB6<out>  =LCD E					       *    
+;    Pin config: RC<0:7>    =LCD D<0:7>	(datapins)                             *          
+;		 RB4	    =LCD RS	(reg select)			       *	           
+;		 RB5	    =LCD R/W	(write/read)			       *		           
+;		 RB6	    =LCD E	(enable)			       *
 ;*******************************************************************************
 #include "p16F690.inc"
 
@@ -79,10 +79,10 @@ SETUP
 ;-------------------------------------------------------------------------------
 ;LCD setup
 ;-------------------------------------------------------------------------------
-;    Pin config: RC0-8<out>=LCD dataout                                        
-;		 RB4<out>  =LCD RS					           
-;		 RB5<out>  =LCD R/W					           
-;		 RB6<out>  =LCD E					       
+;    Pin config: RC<0:8>    =LCD D<0:7>	(dataout)                                        
+;		 RB4	    =LCD RS	(reg select)					           
+;		 RB5	    =LCD R/W	(write/read)					           
+;		 RB6	    =LCD E	(enable)					       
     
     BANKSEL TRISC
     CLRF TRISC			    ;set PORTC as output
@@ -96,19 +96,11 @@ SETUP
     BCF PORTB,4			    ;set LCD to command mode
     MOVLW b'0000100'		    ;00001DBC Display=on Blinking=off Cursor=off
     BSF PORTB,6			    ;toggle the enable bit with a delay
-    nop
-    nop
-    nop
-    nop
-    nop
+    test_busy_flag
     BCF PORTB,6
     MOVLW b'00111000'		    ;001DNFxx D(8bit)=1 N(2line)=1 F(5x11 or 5x8)=0
     BSF PORTB,6			    ;toggle the enable bit with a delay
-    nop
-    nop
-    nop
-    nop
-    nop
+    test_busy_flag
     BCF PORTB,6
 ;-------------------------------------------------------------------------------
  
@@ -121,12 +113,14 @@ SETUP
 ;==================END=ADC=config======== 
  
     ;delay by 50ms for the LCD to initialize
-    
-    
-START
-    MOVLW .97
+
+TESTCODE
+    MOVLW .97	    ;a
     MOVWF LCD_BUFFER
     CALL lcd.write
+;endtestcode
+START
+
    
 ;    CALL SampleData
 ;    BTFSS STATE,0		    ; are we in playback mode
@@ -365,7 +359,7 @@ lcd.write
     MOVFW LCD_BUFFER
     MOVWF PORTC	    ;output data to LCD
     BSF PORTB,6	    ;toggle enable on
-    nop		    ;delay so LCD can read in the values
+    test_busy_flag
     BCF PORTB,7	    ;toggle enable off
     
     RETURN
