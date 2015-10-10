@@ -65,6 +65,7 @@ test_busy_flag macro
     
     BSF PORTB,6			    ;pulse enable bit
     nop
+    nop
     BCF PORTB,6
     
     BTFSC PORTC,7		    ;test busy flag until cleared
@@ -86,7 +87,7 @@ test_busy_flag macro
 
 MAIN_PROG CODE                      ; let linker place main program
 SETUP
- 
+
 ;-------------------------------------------------------------------------------
 ;LCD setup
 ;-------------------------------------------------------------------------------
@@ -94,6 +95,20 @@ SETUP
 ;		 RB4	    =LCD RS	(reg select)					           
 ;		 RB5	    =LCD R/W	(write/read)					           
 ;		 RB6	    =LCD E	(enable)					       
+    
+    MOVLW 0xff
+    BANKSEL TRISC
+    MOVWF TRISC			    ;set PORTC as input so we don't mess with initialization
+    BANKSEL TRISB
+    MOVWF TRISB			    ;set PORTB as input so we don't mess with initialization
+
+    delay_10_ms
+    delay_10_ms
+    delay_10_ms
+    delay_10_ms
+    delay_10_ms
+    
+ 
     BANKSEL TRISC
     CLRF TRISC			    ;set PORTC as output
     BANKSEL TRISB
@@ -103,11 +118,13 @@ SETUP
     CLRF PORTC			    ;set default state
     CLRF PORTB			    ;set default state
     
+
     test_busy_flag    
     BCF PORTB,4			    ;set LCD to command mode
     MOVLW b'0000100'		    ;00001DBC Display=on Blinking=off Cursor=off
     MOVFW PORTC
     BSF PORTB,6			    ;toggle the enable bit with a delay
+    nop
     nop
     BCF PORTB,6
     
@@ -116,6 +133,7 @@ SETUP
     MOVLW b'00111000'		    ;001DNFxx D(8bit)=1 N(2line)=1 F(5x11 or 5x8)=0
     MOVFW PORTC
     BSF PORTB,6			    ;toggle the enable bit with a delay
+    nop
     nop
     BCF PORTB,6
 ;-------------------------------------------------------------------------------
@@ -374,6 +392,7 @@ lcd.write
     MOVFW LCD_BUFFER
     MOVWF PORTC	    ;output data to LCD
     BSF PORTB,6	    ;toggle enable on
+    nop
     nop
     BCF PORTB,7	    ;toggle enable off
     
