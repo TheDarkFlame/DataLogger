@@ -88,6 +88,9 @@ test_busy_flag macro
 MAIN_PROG CODE                      ; let linker place main program
 SETUP
 
+    BANKSEL ANSEL
+    CLRF ANSEL	    ;set pins to digital
+    CLRF ANSELH
 ;-------------------------------------------------------------------------------
 ;LCD setup
 ;-------------------------------------------------------------------------------
