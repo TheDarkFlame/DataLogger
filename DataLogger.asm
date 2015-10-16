@@ -10,6 +10,8 @@
 ;		 RB4	    =LCD RS	(reg select data=1 command=0)	       *	           
 ;		 RB5	    =LCD R/W	(write=1/read=0)		       *		           
 ;		 RB6	    =LCD E	(enable=1)			       *
+;                                                                              *    
+;                                                                              *    
 ;*******************************************************************************
 #include "p16F690.inc"
 
@@ -31,6 +33,9 @@ LCD_BUFFER res 1	    ;stores whatever we want to put on the LCD right now
 ;-----x--		    ;button_up state 0=released 1=pressed
 D1  res 1		    ;delay register 1
 D2  res 1		    ;delay resgiter 2
+BCD_H res 1		    ;register used for bin->BCD (high byte)
+BCD_L res 1		    ;register used for bin->BCD (low byte)
+  
 RES_VECT  CODE    0x0000            ; processor reset vector
     GOTO    SETUP                   ; go to beginning of program
 
@@ -56,7 +61,7 @@ delay_10_ms macro
 ;-------------------------------------------------------------------------------
 test_busy_flag macro
     ;waits until busy flag is cleared
-    ;outputs: MCU = bank0; LCD= read mode & data mode
+    ;outputs: MCU = bank0; LCD= write mode
     BANKSEL TRISC
     BSF TRISC,7			    ;set RC7 as input to test busy flag
     BANKSEL PORTC
@@ -73,13 +78,22 @@ test_busy_flag macro
     GOTO $-6
     
     BCF	PORTB,5			    ;set back to write mode
-    BSF PORTB,4			    ;set back to data mode
     BANKSEL TRISC
     BCF TRISC,7			    ;set RC7 as output
     BANKSEL PORTB
     ENDM
 ;-------------------------------------------------------------------------------
-
+lcd.write macro
+;writes to LCD, moves WREG->LCD DB<0:7>
+;does not set RS (RB4) or R/W (RB5)
+    BANKSEL PORTC
+    MOVWF PORTC	    ;output data to LCD
+    BSF PORTB,6	    ;toggle enable on
+    nop
+    nop
+    BCF PORTB,6	    ;toggle enable off
+    
+    ENDM
 ;###END#OF#MACROS###
     
 ;*******************************************************************************
@@ -122,28 +136,15 @@ SETUP
     CLRF PORTC			    ;set default state
     CLRF PORTB			    ;set default state
     
-
     
-    test_busy_flag    
-    BCF PORTB,4			    ;set LCD to command mode
     MOVLW b'00111000'		    ;001DNFxx D(8bit)=1 N(2line)=1 F(5x11 or 5x8)=0
-    MOVWF PORTC
-    BSF PORTB,6			    ;toggle the enable bit with a delay
-    nop
-    nop
-    BCF PORTB,6
-
+    MOVWF LCD_BUFFER		    ;move command into buffer
+    CALL lcd.command		    ;send command
     
-    test_busy_flag    
-    BCF PORTB,4			    ;set LCD to command mode
+    
     MOVLW b'00001111'		    ;00001DCB Display=on Blinking=off Cursor=off
-    MOVWF PORTC
-    BSF PORTB,6			    ;toggle the enable bit with a delay
-    nop
-    nop
-    BCF PORTB,6
-    delay_10_ms
-    delay_10_ms
+    MOVWF LCD_BUFFER		    ;move command into buffer
+    CALL lcd.command		    ;send command
 ;-------------------------------------------------------------------------------
  
  ;=============ADC config================
@@ -391,19 +392,58 @@ sampledata
 ;###END#OF#CALL###
     
 ;*******************************************************************************
-; LCD write function - writes data in LCD_BUFFER to the LCD 
+; LCD write data - writes data in LCD_BUFFER to the LCD 
 ;*******************************************************************************
-lcd.write
-
-    test_busy_flag
+lcd.data
+    test_busy_flag		    ;outputs in bank0, write mode
     
-    MOVFW LCD_BUFFER
-    MOVWF PORTC	    ;output data to LCD
-    BSF PORTB,6	    ;toggle enable on
-    nop
-    nop
-    BCF PORTB,6	    ;toggle enable off
+    BSF PORTB,4			    ;set to data mode
+    MOVFW LCD_BUFFER		    ;move LCD buffer into W
+    lcd.write			    ;write data to LCD
     
     RETURN
 ;###END#OF#CALL###
+    
+;*******************************************************************************
+; LCD write command - writes commands to in LCD_BUFFER to the LCD 
+;*******************************************************************************
+lcd.command
+
+    test_busy_flag		    ;outputs in bank0, write mode
+    
+    BCF PORTB,4			    ;set to command mode
+    MOVFW LCD_BUFFER		    ;move LCD buffer into W
+    lcd.write			    ;write data to LCD
+    
+    RETURN
+;###END#OF#CALL###
+
+    
+;*******************************************************************************
+;	binary -> BCD outputs W as BCD_L and BCD_H
+;*******************************************************************************
+BINtoBCD
+							
+    ;DISP_BUFF_H = quotient
+    ;DISP_BUFF_L = remainder
+    CLRF   BCD_H		;clear our quotient
+    MOVWF   BCD_L		;store the number to be divided
+    
+    MOVLW   0x0A			;load 10 into W
+
+Div10Loop
+    SUBWF   BCD_L,1	;subtract 10 from number
+    BTFSC   BCD_L,7	;test for -ve
+    GOTO    Div10Finished	;if number is -ve, goto finshed
+    
+    INCF    BCD_H,F
+    GOTO    Div10Loop
+
+Div10Finished
+    ADDWF   BCD_L,1	;undo last subtraction to get remainder
+    
+    RETURN
+    
+;###END#OF#CALL###
+
     END
