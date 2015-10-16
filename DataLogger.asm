@@ -63,13 +63,14 @@ test_busy_flag macro
     BSF PORTB,5			    ;set to read mode
     BCF PORTB,4			    ;set to command mode
     
+    nop
     BSF PORTB,6			    ;pulse enable bit
     nop
     nop
     BCF PORTB,6
     
     BTFSC PORTC,7		    ;test busy flag until cleared
-    GOTO $-1
+    GOTO $-6
     
     BCF	PORTB,5			    ;set back to write mode
     BSF PORTB,4			    ;set back to data mode
@@ -122,23 +123,27 @@ SETUP
     CLRF PORTB			    ;set default state
     
 
-    test_busy_flag    
-    BCF PORTB,4			    ;set LCD to command mode
-    MOVLW b'0000100'		    ;00001DBC Display=on Blinking=off Cursor=off
-    MOVFW PORTC
-    BSF PORTB,6			    ;toggle the enable bit with a delay
-    nop
-    nop
-    BCF PORTB,6
     
     test_busy_flag    
     BCF PORTB,4			    ;set LCD to command mode
     MOVLW b'00111000'		    ;001DNFxx D(8bit)=1 N(2line)=1 F(5x11 or 5x8)=0
-    MOVFW PORTC
+    MOVWF PORTC
     BSF PORTB,6			    ;toggle the enable bit with a delay
     nop
     nop
     BCF PORTB,6
+
+    
+    test_busy_flag    
+    BCF PORTB,4			    ;set LCD to command mode
+    MOVLW b'00001111'		    ;00001DCB Display=on Blinking=off Cursor=off
+    MOVWF PORTC
+    BSF PORTB,6			    ;toggle the enable bit with a delay
+    nop
+    nop
+    BCF PORTB,6
+    delay_10_ms
+    delay_10_ms
 ;-------------------------------------------------------------------------------
  
  ;=============ADC config================
@@ -151,10 +156,10 @@ SETUP
  
     ;delay by 50ms for the LCD to initialize
 
-TESTCODE
-    MOVLW .97	    ;a
-    MOVWF LCD_BUFFER
-    CALL lcd.write
+;TESTCODE
+;    MOVLW 'a'	    ;a
+;    MOVWF LCD_BUFFER
+;    CALL lcd.write
 ;endtestcode
 START
 
@@ -397,7 +402,7 @@ lcd.write
     BSF PORTB,6	    ;toggle enable on
     nop
     nop
-    BCF PORTB,7	    ;toggle enable off
+    BCF PORTB,6	    ;toggle enable off
     
     RETURN
 ;###END#OF#CALL###
