@@ -20,7 +20,7 @@
  __CONFIG _FOSC_EXTRCCLK & _WDTE_OFF & _PWRTE_OFF & _MCLRE_ON & _CP_OFF & _CPD_OFF & _BOREN_ON & _IESO_ON & _FCMEN_ON
 
 variables udata
-CUR_EEADR   res 1	    ;stores value of last written EEADR
+CUR_EEADR   res 1	    ;stores value of current EEADR + 1 (for cycling through EEDAT)
 CUR_TEMPERATURE res 1	    ;stores temperature we are currently working with
 CUR_HUMIDITY	res 1	    ;stores humidity we are currently working with
 CUR_TIME_L  res 1	    ;stores minutes we are currently working with
@@ -35,7 +35,7 @@ D1  res 1		    ;delay register 1
 D2  res 1		    ;delay resgiter 2
 BCD_H res 1		    ;register used for bin->BCD (high byte)
 BCD_L res 1		    ;register used for bin->BCD (low byte)
-  
+TEMP_REG res 1		    ;temporary register
 RES_VECT  CODE    0x0000            ; processor reset vector
     GOTO    SETUP                   ; go to beginning of program
 
@@ -81,6 +81,7 @@ test_busy_flag macro
     BANKSEL TRISC
     BCF TRISC,7			    ;set RC7 as output
     BANKSEL PORTB
+    
     ENDM
 ;-------------------------------------------------------------------------------
 lcd.write macro
@@ -94,6 +95,35 @@ lcd.write macro
     BCF PORTB,6	    ;toggle enable off
     
     ENDM
+    
+;-------------------------------------------------------------------------------
+eeprom.store macro edata, eadr
+ ;does the eeprom store command, simple saves "edata" into "eadr" in eeprom
+    BANKSEL eadr
+    MOVFW eadr ;move CUR_EEADR into W
+    BANKSEL EEADR
+    MOVWF EEADR	    ;move W into EEADR
+    BANKSEL PORTC
+    MOVFW edata	    ;move our data into W
+    BANKSEL EEDAT
+    MOVWF EEDAT	    ;move W into EEDAT
+    BANKSEL EECON1
+    BCF EECON1, EEPGD;data memory
+    BSF EECON1, WREN;enable writes    
+    
+    MOVLW 0x55
+    MOVWF EECON2    ;write 0x55 to EECON2
+    MOVLW 0xAA
+    MOVWF EECON2    ;write 0xAA to EECON2
+    BSF EECON1,WR   ;begin write
+    
+    BTFSC EECON1,WR ;check for end of write
+    GOTO $-1	    ;loop until clear(Write complete)
+    BCF EECON1, WREN;disable writes
+    BANKSEL 0x00    ;move back to bank0
+    
+    ENDM
+;-------------------------------------------------------------------------------
 ;###END#OF#MACROS###
     
 ;*******************************************************************************
@@ -175,171 +205,49 @@ START
 ; EEPROM.write 
 ;*******************************************************************************
 eeprom.write
+    BANKSEL INTCON
     BCF INTCON, GIE ;disable interrupts
     ;EEDATA structure:
     ;0->251 =	log
     ;		252=CUR_EEADR  address accessed
     ;		253=LOG_COUNT  number of entries in storage (max=63)
     
-;store temperature
     BANKSEL 0x00    ;move to bank0
-    INCF CUR_EEADR,F
     
-    ;check here if the value is 252, if 252, reset to 0
+;check here if the value is 252, if 252, reset to 0
     MOVLW .252
     SUBWF CUR_EEADR,W
     BTFSC STATUS,Z  ;if Z=set (CUR_EEADR=252) then set CUR_EEADR to 0
     CLRF CUR_EEADR  ;set CUR_EEADR=0
+
     
-    MOVFW CUR_EEADR ;move CUR_EEADR into W
-    BANKSEL EEADR
-    MOVWF EEADR	    ;move W into EEADR
-    BANKSEL PORTC
-    MOVFW CUR_TEMPERATURE
-    BANKSEL EEDAT
-    MOVWF EEDAT	    ;move our data into EEDAT
-    BANKSEL EECON1
-    BCF EECON1, EEPGD;data memory
-    BSF EECON1, WREN;enable writes
-    
-    MOVLW 0x55
-    MOVWF EECON2    ;write 0x55 to EECON2
-    MOVLW 0xAA
-    MOVWF EECON2    ;write 0xAA to EECON2
-    BSF EECON1,WR   ;begin write
-    
-    BTFSC EECON1,WR ;check for end of write
-    GOTO $-1	    ;loop until clear(Write complete)
-    BCF EECON1, WREN;disable writes
-    BANKSEL 0x00    ;move back to bank0
-    
-    
+;store temperature
+    eeprom.store CUR_TEMPERATURE, CUR_EEADR    ;writes CUR_TEMPERATURE to CUR_EEADR
+    INCF CUR_EEADR,F
     
 ;store humidity
+    eeprom.store CUR_HUMIDITY, CUR_EEADR    ;writes CUR_HUMIDITY to CUR_EEADR
     INCF CUR_EEADR,F
-    MOVFW CUR_EEADR ;get next location to store value in
-    BANKSEL EEADR
-    MOVWF EEADR	    ;move W into EEADR
-    BANKSEL PORTC
-    MOVFW CUR_HUMIDITY
-    BANKSEL EEDAT
-    MOVWF EEDAT	    ;move our data into EEDAT
-    BANKSEL EECON1
-    BCF EECON1, EEPGD;data memory
-    BSF EECON1, WREN;enable writes
-    
-    MOVLW 0x55
-    MOVWF EECON2    ;write 0x55 to EECON2
-    MOVLW 0xAA
-    MOVWF EECON2    ;write 0xAA to EECON2
-    BSF EECON1,WR   ;begin write
-    
-    BTFSC EECON1,WR ;check for end of write
-    GOTO $-1	    ;loop until clear(Write complete)
-    BCF EECON1, WREN;disable writes
-    BANKSEL 0x00    ;move back to bank0
-    
-    
     
 ;store minutes
+    eeprom.store CUR_TIME_L, CUR_EEADR    ;writes CUR_TIME_L to CUR_EEADR
     INCF CUR_EEADR,F
-    MOVFW CUR_EEADR ;get next location to store value in
-    BANKSEL EEADR
-    MOVWF EEADR	    ;move W into EEADR
-    BANKSEL PORTC
-    MOVFW CUR_TIME_L
-    BANKSEL EEDAT
-    MOVWF EEDAT	    ;move our data into EEDAT
-    BANKSEL EECON1
-    BCF EECON1, EEPGD;data memory
-    BSF EECON1, WREN;enable writes
-    
-    MOVLW 0x55
-    MOVWF EECON2    ;write 0x55 to EECON2
-    MOVLW 0xAA
-    MOVWF EECON2    ;write 0xAA to EECON2
-    BSF EECON1,WR   ;begin write
-    
-    BTFSC EECON1,WR ;check for end of write
-    GOTO $-1	    ;loop until clear(Write complete)
-    BCF EECON1, WREN;disable writes
-    BANKSEL 0x00    ;move back to bank0
-
-
     
 ;store hours
-    INCF CUR_EEADR,F
-    MOVFW CUR_EEADR ;get next location to store value in
-    BANKSEL EEADR
-    MOVWF EEADR	    ;move W into EEADR
-    BANKSEL PORTC
-    MOVFW CUR_TIME_H
-    BANKSEL EEDAT
-    MOVWF EEDAT	    ;move our data into EEDAT
-    BANKSEL EECON1
-    BCF EECON1, EEPGD;data memory
-    BSF EECON1, WREN;enable writes
-    
-    MOVLW 0x55
-    MOVWF EECON2    ;write 0x55 to EECON2
-    MOVLW 0xAA
-    MOVWF EECON2    ;write 0xAA to EECON2
-    BSF EECON1,WR   ;begin write
-    
-    BTFSC EECON1,WR ;check for end of write
-    GOTO $-1	    ;loop until clear(Write complete)
-    BCF EECON1, WREN;disable writes
-    
-    
+    eeprom.store CUR_TIME_H, CUR_EEADR    ;writes CUR_TIME_H to CUR_EEADR
+    INCF CUR_EEADR,F  
     
 ;store current address
-    BANKSEL EEADR
     MOVLW .252
-    MOVWF EEADR	    ;move W into EEADR
-    BANKSEL PORTC
-    MOVFW CUR_EEADR
-    BANKSEL EEDAT
-    MOVWF EEDAT	    ;move our data into EEDAT
-    BANKSEL EECON1
-    BCF EECON1, EEPGD;data memory
-    BSF EECON1, WREN;enable writes
-    
-    MOVLW 0x55
-    MOVWF EECON2    ;write 0x55 to EECON2
-    MOVLW 0xAA
-    MOVWF EECON2    ;write 0xAA to EECON2
-    BSF EECON1,WR   ;begin write
-    
-    BTFSC EECON1,WR ;check for end of write
-    GOTO $-1	    ;loop until clear(Write complete)
-    BCF EECON1, WREN;disable writes
- 
-
+    MOVWF TEMP_REG
+    eeprom.store CUR_EEADR,TEMP_REG    ;writes CUR_EEADR to .252
     
 ;store number of entries
-    BANKSEL EEADR
     MOVLW .253
-    MOVWF EEADR	    ;move W into EEADR
-    BANKSEL PORTC
-    MOVFW LOG_COUNT
-    BANKSEL EEDAT
-    MOVWF EEDAT	    ;move our data into EEDAT
-    BANKSEL EECON1
-    BCF EECON1, EEPGD;data memory
-    BSF EECON1, WREN;enable writes
+    MOVWF TEMP_REG
+    eeprom.store LOG_COUNT,TEMP_REG    ;writes CUR_EEADR to .252
     
-    MOVLW 0x55
-    MOVWF EECON2    ;write 0x55 to EECON2
-    MOVLW 0xAA
-    MOVWF EECON2    ;write 0xAA to EECON2
-    BSF EECON1,WR   ;begin write
-    
-    BTFSC EECON1,WR ;check for end of write
-    GOTO $-1	    ;loop until clear(Write complete)
-    BCF EECON1, WREN;disable writes
-    BANKSEL 0x00    ;move back to bank0
-    
-    BSF INTCON, GIE ;disable interrupts
+    BSF INTCON, GIE ;enable interrupts
     RETURN
 ;###END#OF#CALL###
     
