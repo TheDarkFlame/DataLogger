@@ -247,9 +247,10 @@ sampledata
 ;sample humidity
 ;--------------------------------
     ;humidity is a vaguely linear value, ranging from 1V(30%) to 3V(90%)
-    ;for every 10% there is 0.33V so 1% is 33mV.
-    ;thus we require ADC conversions to have minimum step of at most 33mV (preferably half this)
-    ;desirable step size = 16mv per step.
+    ;for every 10% there is 0.33V	 so 1% is 33mV.
+    ;the ADC has a minimum step size of 40mv, as such we will use a OP-amp to amplify
+    ;40/33=1.21. thus we use a positive amplifier with resistor values of the ratio 5*Rf=R1 
+
     
 ;--------------------------------
 ;obtain time
