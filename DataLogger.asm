@@ -10,8 +10,10 @@
 ;		 RC4	    =LCD RS	(reg select data=1 command=0)	       *	           
 ;		 RC6	    =LCD R/W	(write=0/read=1)		       *		           
 ;		 RC7	    =LCD E	(enable=1)			       *
-;                                                                              *    
-;                                                                              *    
+;                RB4	    =Temperature sensor                                *    
+;                RB5        =Humidity sensor                                   *    
+;                RA0        =Button	                                       *    
+;                RA1        =Button	                                       *    
 ;*******************************************************************************
 #include "p16F690.inc"
 
@@ -111,6 +113,9 @@ SETUP
     BANKSEL ANSEL
     CLRF ANSEL	    ;set pins to digital
     CLRF ANSELH
+    ;set RB4 and RB5 to Analogue
+    BSF ANSELH,2    ;AN10 note ANSELH<0:3> = AN<8:11>
+    BSF ANSELH,3    ;AN11
 ;-------------------------------------------------------------------------------
 ;LCD setup
 ;-------------------------------------------------------------------------------
@@ -150,8 +155,19 @@ SETUP
     MOVWF LCD_BUFFER		    ;move command into buffer
     CALL lcd.command		    ;send command
 ;-------------------------------------------------------------------------------
- 
- ;=============ADC config================
+
+;Configure ports for other peripherals
+    BANKSEL TRISA
+    BSF TRISA,0	    ;button1=input
+    BSF TRISA,1	    ;button2=input
+    
+    BANKSEL TRISB
+    BSF TRISB,4	    ;temperature sensor=input
+    BSF TRISB,5	    ;humidity sensor=input
+    
+    
+    
+;=============ADC config================
     ;most code here is based on the datasheet's example code
     BANKSEL ADCON1
     MOVLW b'0111000'			;configure conversion speed
@@ -161,11 +177,8 @@ SETUP
  
     ;delay by 50ms for the LCD to initialize
 
-;TESTCODE
-;    MOVLW 'a'	    ;a
-;    MOVWF LCD_BUFFER
-;    CALL lcd.write
-;endtestcode
+
+
 START
 
    
@@ -234,8 +247,8 @@ sampledata
 ;sample temperature
 ;--------------------------------
     BANKSEL ADCON0
-    MOVLW b'10010001'			;right justify
-    MOVWF ADCON0			;Vdd,AN4, on
+    MOVLW b'10101101'			;right justify
+    MOVWF ADCON0			;Vdd,AN11, on
 
     ;6uS delay
     nop
@@ -263,7 +276,28 @@ sampledata
     ;for every 10% there is 0.33V	 so 1% is 33mV.
     ;the ADC has a minimum step size of 40mv, as such we will use a OP-amp to amplify
     ;40/33=1.21. thus we use a positive amplifier with resistor values of the ratio 5*Rf=R1 
+    ;1bit=1%
+    BANKSEL ADCON0
+    MOVLW b'10101001'			;right justify
+    MOVWF ADCON0			;Vdd,AN10, on
 
+    ;6uS delay
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+    
+    BSF ADCON0,GO	;start conversion
+    BTFSC ADCON0,GO	;are we done the conversion?
+    GOTO $-1		;try again if not
+
+    BCF STATUS,C
+    BANKSEL ADRESL
+    MOVFW ADRESL,F	;divide by 2, rounding up
+    BANKSEL PORTC
+    MOVWF CUR_HUMIDITY   ;stored for saving to eeprom later (and for displaying)
     
 ;--------------------------------
 ;obtain time
