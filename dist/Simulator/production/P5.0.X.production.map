@@ -1,0 +1,118 @@
+MPLINK 5.08, LINKER
+Linker Map File - Created Sun Oct 18 19:01:57 2015
+
+                                 Section Info
+                  Section       Type    Address   Location Size(Bytes)
+                ---------  ---------  ---------  ---------  ---------
+                 RES_VECT       code   0x000000    program   0x000002
+                   .cinit    romdata   0x000001    program   0x000004
+                MAIN_PROG       code   0x000003    program   0x0002d0
+.config_2007_BUILD/SIMULATOR/PRODUCTION/DATAL       code   0x002007    program   0x000002
+                variables      udata   0x000020       data   0x00000d
+
+
+
+                              Program Memory Usage 
+                               Start         End      
+                           ---------   ---------      
+                            0x000000    0x00016a      
+                            0x002007    0x002007      
+            364 out of 4359 program addresses used, program memory utilization is 8%
+
+
+
+                              Symbols - Sorted by Name
+                     Name    Address   Location    Storage File                     
+                ---------  ---------  ---------  --------- ---------                
+                 BINtoBCD   0x000161    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+            Div10Finished   0x000169    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                Div10Loop   0x000164    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                    SETUP   0x000003    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                    START   0x00004a    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0010   0x000013    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0012   0x000015    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0018   0x00001b    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_001A   0x00001d    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0020   0x000023    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0022   0x000025    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0028   0x00002b    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_002A   0x00002d    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0030   0x000033    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0032   0x000035    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0067   0x00006a    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0082   0x000085    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_009D   0x0000a0    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_00B8   0x0000bb    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_00D5   0x0000d8    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_00F1   0x0000f4    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0103   0x000106    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0118   0x00011b    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_012F   0x000132    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_014D   0x000150    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+             eeprom.write   0x00004b    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+              lcd.command   0x000143    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                 lcd.data   0x000125    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+               sampledata   0x0000fa    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                    BCD_H   0x00002a       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                    BCD_L   0x00002b       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                CUR_EEADR   0x000020       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+             CUR_HUMIDITY   0x000022       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          CUR_TEMPERATURE   0x000021       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+               CUR_TIME_H   0x000024       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+               CUR_TIME_L   0x000023       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                       D1   0x000028       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                       D2   0x000029       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+               LCD_BUFFER   0x000027       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                LOG_COUNT   0x000025       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                    STATE   0x000026       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                 TEMP_REG   0x00002c       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+
+
+
+                              Symbols - Sorted by Address
+                     Name    Address   Location    Storage File                     
+                ---------  ---------  ---------  --------- ---------                
+                    SETUP   0x000003    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0010   0x000013    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0012   0x000015    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0018   0x00001b    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_001A   0x00001d    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0020   0x000023    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0022   0x000025    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0028   0x00002b    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_002A   0x00002d    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0030   0x000033    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0032   0x000035    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                    START   0x00004a    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+             eeprom.write   0x00004b    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0067   0x00006a    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0082   0x000085    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_009D   0x0000a0    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_00B8   0x0000bb    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_00D5   0x0000d8    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_00F1   0x0000f4    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+               sampledata   0x0000fa    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0103   0x000106    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_0118   0x00011b    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                 lcd.data   0x000125    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_012F   0x000132    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+              lcd.command   0x000143    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          _MAIN_PROG_014D   0x000150    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                 BINtoBCD   0x000161    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                Div10Loop   0x000164    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+            Div10Finished   0x000169    program     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                CUR_EEADR   0x000020       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+          CUR_TEMPERATURE   0x000021       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+             CUR_HUMIDITY   0x000022       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+               CUR_TIME_L   0x000023       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+               CUR_TIME_H   0x000024       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                LOG_COUNT   0x000025       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                    STATE   0x000026       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+               LCD_BUFFER   0x000027       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                       D1   0x000028       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                       D2   0x000029       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                    BCD_H   0x00002a       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                    BCD_L   0x00002b       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+                 TEMP_REG   0x00002c       data     static C:\Users\The_Dark_Flame\OneDrive\Documents\213562404\PIC projects\P5.0.X\DataLogger.asm
+
+

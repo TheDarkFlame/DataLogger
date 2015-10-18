@@ -1,0 +1,1313 @@
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE  1
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                      00001 ;*******************************************************************************
+                      00002 ;                                                                              *
+                      00003 ;    Filename:                                                                 *
+                      00004 ;    Date:                                                                     *
+                      00005 ;    File Version:                                                             *
+                      00006 ;    Author:                                                                   *
+                      00007 ;    Company:                                                                  *
+                      00008 ;    Description:                                                              *
+                      00009 ;    Pin config: RC<0:3>    =LCD D<4:7> (datapins)                             *          
+                      00010 ;                RC4        =LCD RS     (reg select data=1 command=0)          *                   
+                      00011 ;                RC6        =LCD R/W    (write=0/read=1)                       *                        
+                               
+                      00012 ;                RC7        =LCD E      (enable=1)                             *
+                      00013 ;                                                                              *    
+                      00014 ;                                                                              *    
+                      00015 ;*******************************************************************************
+                      00016 #include "p16F690.inc"
+                      00001         LIST
+                      00002 
+                      00003 ;==========================================================================
+                      00004 ; Build date : Apr 06 2015
+                      00005 ;  MPASM PIC16F690 processor include
+                      00006 ; 
+                      00007 ;  (c) Copyright 1999-2015 Microchip Technology, All rights reserved
+                      00008 ;==========================================================================
+                      00009 
+                      00757         LIST
+                      00017 
+                      00018 ; CONFIG
+                      00019 ; __config 0xFFF7
+2007   3FF7           00020  __CONFIG _FOSC_EXTRCCLK & _WDTE_OFF & _PWRTE_OFF & _MCLRE_ON & _CP_OFF & _CPD_OFF & _BOREN_ON & _IESO_O
+                            N & _FCMEN_ON
+                      00021 
+                      00022 variables udata
+0000                  00023 CUR_EEADR   res 1           ;stores value of current EEADR + 1 (for cycling through EEDAT)
+0001                  00024 CUR_TEMPERATURE res 1       ;stores temperature we are currently working with
+0002                  00025 CUR_HUMIDITY    res 1       ;stores humidity we are currently working with
+0003                  00026 CUR_TIME_L  res 1           ;stores minutes we are currently working with
+0004                  00027 CUR_TIME_H  res 1           ;stores hours we are currently working with
+0005                  00028 LOG_COUNT   res 1           ;number of logs we have in memory (63 max)
+0006                  00029 STATE   res 1               ;state register
+0007                  00030 LCD_BUFFER res 1            ;stores whatever we want to put on the LCD right now
+                      00031 ;-------x                   ;mode bit 1=playback 0=display
+                      00032 ;------x-                   ;button_up state 0=released 1=pressed
+                      00033 ;-----x--                   ;button_up state 0=released 1=pressed
+0008                  00034 D1  res 1                   ;delay register 1
+0009                  00035 D2  res 1                   ;delay resgiter 2
+000A                  00036 BCD_H res 1                 ;register used for bin->BCD (high byte)
+000B                  00037 BCD_L res 1                 ;register used for bin->BCD (low byte)
+000C                  00038 TEMP_REG res 1              ;temporary register
+                      00039 RES_VECT  CODE    0x0000            ; processor reset vector
+0000   2???           00040     GOTO    SETUP                   ; go to beginning of program
+                      00041 
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE  2
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                      00042 ;*******************************************************************************
+                      00043 ; MACROS
+                      00044 ;*******************************************************************************
+                      00045 
+                      00046 ;-------------------------------------------------------------------------------    
+                      00047 delay_10_ms macro
+                      00048     ;goto=2 cyles, decfsz=1 cycle, if zero=2 cycles
+                      00049     MOVLW .40
+                      00050     MOVWF D2
+                      00051 
+                      00052 ;if innerloopnumber=82, total cycles=10082, which is close enough to 10ms
+                      00053     MOVLW .83   ;approx 1/4 ms
+                      00054     MOVWF D1    
+                      00055     
+                      00056     DECFSZ D1,F ;count until D1=0
+                      00057     GOTO $-1    ;keep counting down until
+                      00058     DECFSZ D2,F ;D1=0, so count down D2, and reset D1 until D2=0
+                      00059     GOTO $-4    ;reset D1
+                      00060     ENDM
+                      00061 ;-------------------------------------------------------------------------------
+                      00062 
+                      00063     
+                      00064 ;-------------------------------------------------------------------------------
+                      00065 eeprom.store macro edata, eadr
+                      00066  ;does the eeprom store command, simple saves "edata" into "eadr" in eeprom
+                      00067     BANKSEL eadr
+                      00068     MOVFW eadr ;move CUR_EEADR into W
+                      00069     BANKSEL EEADR
+                      00070     MOVWF EEADR     ;move W into EEADR
+                      00071     BANKSEL PORTC
+                      00072     MOVFW edata     ;move our data into W
+                      00073     BANKSEL EEDAT
+                      00074     MOVWF EEDAT     ;move W into EEDAT
+                      00075     BANKSEL EECON1
+                      00076     BCF EECON1, EEPGD;data memory
+                      00077     BSF EECON1, WREN;enable writes    
+                      00078     
+                      00079     MOVLW 0x55
+                      00080     MOVWF EECON2    ;write 0x55 to EECON2
+                      00081     MOVLW 0xAA
+                      00082     MOVWF EECON2    ;write 0xAA to EECON2
+                      00083     BSF EECON1,WR   ;begin write
+                      00084     
+                      00085     BTFSC EECON1,WR ;check for end of write
+                      00086     GOTO $-1        ;loop until clear(Write complete)
+                      00087     BCF EECON1, WREN;disable writes
+                      00088     BANKSEL 0x00    ;move back to bank0
+                      00089     
+                      00090     ENDM
+                      00091 ;-------------------------------------------------------------------------------
+                      00092 ;###END#OF#MACROS###
+                      00093     
+                      00094 ;*******************************************************************************
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE  3
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                      00095 ; MAIN PROGRAM
+                      00096 ;*******************************************************************************
+                      00097 
+                      00098 MAIN_PROG CODE                      ; let linker place main program
+0000                  00099 SETUP
+                      00100 
+0000   1283 1703      00101     BANKSEL ANSEL
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0002   019E           00102     CLRF ANSEL      ;set pins to digital
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0003   019F           00103     CLRF ANSELH
+                      00104 ;-------------------------------------------------------------------------------
+                      00105 ;LCD setup
+                      00106 ;-------------------------------------------------------------------------------
+                      00107 ;    Pin config: RC<0:3>    =LCD D<4:7> (datapins)                             *          
+                      00108 ;                RC4        =LCD RS     (reg select data=1 command=0)          *                   
+                      00109 ;                RC6        =LCD R/W    (write=0/read=1)                       *                        
+                               
+                      00110 ;                RC7        =LCD E      (enable=1)                             *
+                      00111     
+0004   30FF           00112     MOVLW 0xff
+0005   1683 1303      00113     BANKSEL TRISC
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0007   0087           00114     MOVWF TRISC                     ;set PORTC as input so we don't mess with initialization
+                      00115     
+                      00116     delay_10_ms
+                          M     ;goto=2 cyles, decfsz=1 cycle, if zero=2 cycles
+0008   3028               M     MOVLW .40
+0009   00??               M     MOVWF D2
+                          M 
+                          M ;if innerloopnumber=82, total cycles=10082, which is close enough to 10ms
+000A   3053               M     MOVLW .83   ;approx 1/4 ms
+000B   00??               M     MOVWF D1    
+                          M     
+000C   0B??               M     DECFSZ D1,F ;count until D1=0
+000D   2???               M     GOTO $-1    ;keep counting down until
+000E   0B??               M     DECFSZ D2,F ;D1=0, so count down D2, and reset D1 until D2=0
+000F   2???               M     GOTO $-4    ;reset D1
+                      00117     delay_10_ms
+                          M     ;goto=2 cyles, decfsz=1 cycle, if zero=2 cycles
+0010   3028               M     MOVLW .40
+0011   00??               M     MOVWF D2
+                          M 
+                          M ;if innerloopnumber=82, total cycles=10082, which is close enough to 10ms
+0012   3053               M     MOVLW .83   ;approx 1/4 ms
+0013   00??               M     MOVWF D1    
+                          M     
+0014   0B??               M     DECFSZ D1,F ;count until D1=0
+0015   2???               M     GOTO $-1    ;keep counting down until
+0016   0B??               M     DECFSZ D2,F ;D1=0, so count down D2, and reset D1 until D2=0
+0017   2???               M     GOTO $-4    ;reset D1
+                      00118     delay_10_ms
+                          M     ;goto=2 cyles, decfsz=1 cycle, if zero=2 cycles
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE  4
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0018   3028               M     MOVLW .40
+0019   00??               M     MOVWF D2
+                          M 
+                          M ;if innerloopnumber=82, total cycles=10082, which is close enough to 10ms
+001A   3053               M     MOVLW .83   ;approx 1/4 ms
+001B   00??               M     MOVWF D1    
+                          M     
+001C   0B??               M     DECFSZ D1,F ;count until D1=0
+001D   2???               M     GOTO $-1    ;keep counting down until
+001E   0B??               M     DECFSZ D2,F ;D1=0, so count down D2, and reset D1 until D2=0
+001F   2???               M     GOTO $-4    ;reset D1
+                      00119     delay_10_ms
+                          M     ;goto=2 cyles, decfsz=1 cycle, if zero=2 cycles
+0020   3028               M     MOVLW .40
+0021   00??               M     MOVWF D2
+                          M 
+                          M ;if innerloopnumber=82, total cycles=10082, which is close enough to 10ms
+0022   3053               M     MOVLW .83   ;approx 1/4 ms
+0023   00??               M     MOVWF D1    
+                          M     
+0024   0B??               M     DECFSZ D1,F ;count until D1=0
+0025   2???               M     GOTO $-1    ;keep counting down until
+0026   0B??               M     DECFSZ D2,F ;D1=0, so count down D2, and reset D1 until D2=0
+0027   2???               M     GOTO $-4    ;reset D1
+                      00120     delay_10_ms
+                          M     ;goto=2 cyles, decfsz=1 cycle, if zero=2 cycles
+0028   3028               M     MOVLW .40
+0029   00??               M     MOVWF D2
+                          M 
+                          M ;if innerloopnumber=82, total cycles=10082, which is close enough to 10ms
+002A   3053               M     MOVLW .83   ;approx 1/4 ms
+002B   00??               M     MOVWF D1    
+                          M     
+002C   0B??               M     DECFSZ D1,F ;count until D1=0
+002D   2???               M     GOTO $-1    ;keep counting down until
+002E   0B??               M     DECFSZ D2,F ;D1=0, so count down D2, and reset D1 until D2=0
+002F   2???               M     GOTO $-4    ;reset D1
+                      00121     
+                      00122  
+0030   1683 1303      00123     BANKSEL TRISC
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0032   0187           00124     CLRF TRISC                      ;set PORTC as output
+                      00125     
+0033   1283 1303      00126     BANKSEL PORTC
+0035   0187           00127     CLRF PORTC                      ;set default state
+                      00128     
+                      00129     ;currently in 8-bit, move into 4-bit
+                      00130     
+0036   2???           00131     CALL test_busy_flag             ;outputs in bank0, write mode
+0037   1207           00132     BCF PORTC,4                     ;set to command mode
+0038   3002           00133     MOVLW b'00000010'               ;4-bit mode
+0039   2???           00134     CALL lcd.write                          ;write W<0:3> to LCD<4:7>
+                      00135     
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE  5
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+003A   300F           00136     MOVLW b'00001111'               ;00001DCB Display=on Blinking=off Cursor=off
+003B   00??           00137     MOVWF LCD_BUFFER                ;move command into buffer
+003C   2???           00138     CALL lcd.command                ;send command
+                      00139 ;-------------------------------------------------------------------------------
+                      00140  
+                      00141  ;=============ADC config================
+                      00142     ;most code here is based on the datasheet's example code
+003D   1683 1303      00143     BANKSEL ADCON1
+003F   3038           00144     MOVLW b'0111000'                    ;configure conversion speed
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0040   009F           00145     MOVWF ADCON1
+                      00146     
+                      00147 ;==================END=ADC=config======== 
+                      00148  
+                      00149     ;delay by 50ms for the LCD to initialize
+                      00150 
+                      00151 ;TESTCODE
+                      00152 ;    MOVLW 'a'      ;a
+                      00153 ;    MOVWF LCD_BUFFER
+                      00154 ;    CALL lcd.write
+                      00155 ;endtestcode
+0041                  00156 START
+                      00157 
+                      00158    
+                      00159 ;    CALL SampleData
+                      00160 ;    BTFSS STATE,0                  ; are we in playback mode
+                      00161     ;delay by 10ms
+0041   2???           00162     GOTO START
+                      00163 
+                      00164 
+                      00165 ;*******************************************************************************
+                      00166 ; EEPROM.write 
+                      00167 ;*******************************************************************************
+0042                  00168 eeprom.write
+0042   1283 1303      00169     BANKSEL INTCON
+0044   138B           00170     BCF INTCON, GIE ;disable interrupts
+                      00171     ;EEDATA structure:
+                      00172     ;0->251 =   log
+                      00173     ;           252=CUR_EEADR  address accessed
+                      00174     ;           253=LOG_COUNT  number of entries in storage (max=63)
+                      00175     
+0045   1283 1303      00176     BANKSEL 0x00    ;move to bank0
+                      00177     
+                      00178 ;check here if the value is 252, if 252, reset to 0
+0047   30FC           00179     MOVLW .252
+0048   02??           00180     SUBWF CUR_EEADR,W
+0049   1903           00181     BTFSC STATUS,Z  ;if Z=set (CUR_EEADR=252) then set CUR_EEADR to 0
+004A   01??           00182     CLRF CUR_EEADR  ;set CUR_EEADR=0
+                      00183 
+                      00184     
+                      00185 ;store temperature
+                      00186     eeprom.store CUR_TEMPERATURE, CUR_EEADR    ;writes CUR_TEMPERATURE to CUR_EEADR
+                          M  ;does the eeprom store command, simple saves "edata" into "eadr" in eeprom
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE  6
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+004B   ???? ????          M     BANKSEL CUR_EEADR
+004D   08??               M     MOVFW CUR_EEADR ;move CUR_EEADR into W
+004E   1283 1703          M     BANKSEL EEADR
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0050   008D               M     MOVWF EEADR     ;move W into EEADR
+0051   1283 1303          M     BANKSEL PORTC
+0053   08??               M     MOVFW CUR_TEMPERATURE ;move our data into W
+0054   1283 1703          M     BANKSEL EEDAT
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0056   008C               M     MOVWF EEDAT     ;move W into EEDAT
+0057   1683 1703          M     BANKSEL EECON1
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0059   138C               M     BCF EECON1, EEPGD;data memory
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+005A   150C               M     BSF EECON1, WREN;enable writes    
+                          M     
+005B   3055               M     MOVLW 0x55
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+005C   008D               M     MOVWF EECON2    ;write 0x55 to EECON2
+005D   30AA               M     MOVLW 0xAA
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+005E   008D               M     MOVWF EECON2    ;write 0xAA to EECON2
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+005F   148C               M     BSF EECON1,WR   ;begin write
+                          M     
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0060   188C               M     BTFSC EECON1,WR ;check for end of write
+0061   2???               M     GOTO $-1        ;loop until clear(Write complete)
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0062   110C               M     BCF EECON1, WREN;disable writes
+0063   1283 1303          M     BANKSEL 0x00    ;move back to bank0
+                          M     
+0065   0A??           00187     INCF CUR_EEADR,F
+                      00188     
+                      00189 ;store humidity
+                      00190     eeprom.store CUR_HUMIDITY, CUR_EEADR    ;writes CUR_HUMIDITY to CUR_EEADR
+                          M  ;does the eeprom store command, simple saves "edata" into "eadr" in eeprom
+0066   ???? ????          M     BANKSEL CUR_EEADR
+0068   08??               M     MOVFW CUR_EEADR ;move CUR_EEADR into W
+0069   1283 1703          M     BANKSEL EEADR
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+006B   008D               M     MOVWF EEADR     ;move W into EEADR
+006C   1283 1303          M     BANKSEL PORTC
+006E   08??               M     MOVFW CUR_HUMIDITY ;move our data into W
+006F   1283 1703          M     BANKSEL EEDAT
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0071   008C               M     MOVWF EEDAT     ;move W into EEDAT
+0072   1683 1703          M     BANKSEL EECON1
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0074   138C               M     BCF EECON1, EEPGD;data memory
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0075   150C               M     BSF EECON1, WREN;enable writes    
+                          M     
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE  7
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0076   3055               M     MOVLW 0x55
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0077   008D               M     MOVWF EECON2    ;write 0x55 to EECON2
+0078   30AA               M     MOVLW 0xAA
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0079   008D               M     MOVWF EECON2    ;write 0xAA to EECON2
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+007A   148C               M     BSF EECON1,WR   ;begin write
+                          M     
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+007B   188C               M     BTFSC EECON1,WR ;check for end of write
+007C   2???               M     GOTO $-1        ;loop until clear(Write complete)
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+007D   110C               M     BCF EECON1, WREN;disable writes
+007E   1283 1303          M     BANKSEL 0x00    ;move back to bank0
+                          M     
+0080   0A??           00191     INCF CUR_EEADR,F
+                      00192     
+                      00193 ;store minutes
+                      00194     eeprom.store CUR_TIME_L, CUR_EEADR    ;writes CUR_TIME_L to CUR_EEADR
+                          M  ;does the eeprom store command, simple saves "edata" into "eadr" in eeprom
+0081   ???? ????          M     BANKSEL CUR_EEADR
+0083   08??               M     MOVFW CUR_EEADR ;move CUR_EEADR into W
+0084   1283 1703          M     BANKSEL EEADR
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0086   008D               M     MOVWF EEADR     ;move W into EEADR
+0087   1283 1303          M     BANKSEL PORTC
+0089   08??               M     MOVFW CUR_TIME_L ;move our data into W
+008A   1283 1703          M     BANKSEL EEDAT
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+008C   008C               M     MOVWF EEDAT     ;move W into EEDAT
+008D   1683 1703          M     BANKSEL EECON1
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+008F   138C               M     BCF EECON1, EEPGD;data memory
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0090   150C               M     BSF EECON1, WREN;enable writes    
+                          M     
+0091   3055               M     MOVLW 0x55
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0092   008D               M     MOVWF EECON2    ;write 0x55 to EECON2
+0093   30AA               M     MOVLW 0xAA
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0094   008D               M     MOVWF EECON2    ;write 0xAA to EECON2
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0095   148C               M     BSF EECON1,WR   ;begin write
+                          M     
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0096   188C               M     BTFSC EECON1,WR ;check for end of write
+0097   2???               M     GOTO $-1        ;loop until clear(Write complete)
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0098   110C               M     BCF EECON1, WREN;disable writes
+0099   1283 1303          M     BANKSEL 0x00    ;move back to bank0
+                          M     
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE  8
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+009B   0A??           00195     INCF CUR_EEADR,F
+                      00196     
+                      00197 ;store hours
+                      00198     eeprom.store CUR_TIME_H, CUR_EEADR    ;writes CUR_TIME_H to CUR_EEADR
+                          M  ;does the eeprom store command, simple saves "edata" into "eadr" in eeprom
+009C   ???? ????          M     BANKSEL CUR_EEADR
+009E   08??               M     MOVFW CUR_EEADR ;move CUR_EEADR into W
+009F   1283 1703          M     BANKSEL EEADR
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00A1   008D               M     MOVWF EEADR     ;move W into EEADR
+00A2   1283 1303          M     BANKSEL PORTC
+00A4   08??               M     MOVFW CUR_TIME_H ;move our data into W
+00A5   1283 1703          M     BANKSEL EEDAT
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00A7   008C               M     MOVWF EEDAT     ;move W into EEDAT
+00A8   1683 1703          M     BANKSEL EECON1
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00AA   138C               M     BCF EECON1, EEPGD;data memory
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00AB   150C               M     BSF EECON1, WREN;enable writes    
+                          M     
+00AC   3055               M     MOVLW 0x55
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00AD   008D               M     MOVWF EECON2    ;write 0x55 to EECON2
+00AE   30AA               M     MOVLW 0xAA
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00AF   008D               M     MOVWF EECON2    ;write 0xAA to EECON2
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00B0   148C               M     BSF EECON1,WR   ;begin write
+                          M     
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00B1   188C               M     BTFSC EECON1,WR ;check for end of write
+00B2   2???               M     GOTO $-1        ;loop until clear(Write complete)
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00B3   110C               M     BCF EECON1, WREN;disable writes
+00B4   1283 1303          M     BANKSEL 0x00    ;move back to bank0
+                          M     
+00B6   0A??           00199     INCF CUR_EEADR,F  
+                      00200     
+                      00201 ;store current address
+00B7   30FC           00202     MOVLW .252
+00B8   00??           00203     MOVWF TEMP_REG
+                      00204     eeprom.store CUR_EEADR,TEMP_REG    ;writes CUR_EEADR to .252
+                          M  ;does the eeprom store command, simple saves "edata" into "eadr" in eeprom
+00B9   ???? ????          M     BANKSEL TEMP_REG
+00BB   08??               M     MOVFW TEMP_REG ;move CUR_EEADR into W
+00BC   1283 1703          M     BANKSEL EEADR
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00BE   008D               M     MOVWF EEADR     ;move W into EEADR
+00BF   1283 1303          M     BANKSEL PORTC
+00C1   08??               M     MOVFW CUR_EEADR ;move our data into W
+00C2   1283 1703          M     BANKSEL EEDAT
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE  9
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+00C4   008C               M     MOVWF EEDAT     ;move W into EEDAT
+00C5   1683 1703          M     BANKSEL EECON1
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00C7   138C               M     BCF EECON1, EEPGD;data memory
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00C8   150C               M     BSF EECON1, WREN;enable writes    
+                          M     
+00C9   3055               M     MOVLW 0x55
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00CA   008D               M     MOVWF EECON2    ;write 0x55 to EECON2
+00CB   30AA               M     MOVLW 0xAA
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00CC   008D               M     MOVWF EECON2    ;write 0xAA to EECON2
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00CD   148C               M     BSF EECON1,WR   ;begin write
+                          M     
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00CE   188C               M     BTFSC EECON1,WR ;check for end of write
+00CF   2???               M     GOTO $-1        ;loop until clear(Write complete)
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00D0   110C               M     BCF EECON1, WREN;disable writes
+00D1   1283 1303          M     BANKSEL 0x00    ;move back to bank0
+                          M     
+                      00205     
+                      00206 ;store number of entries
+00D3   30FD           00207     MOVLW .253
+00D4   00??           00208     MOVWF TEMP_REG
+                      00209     eeprom.store LOG_COUNT,TEMP_REG    ;writes CUR_EEADR to .252
+                          M  ;does the eeprom store command, simple saves "edata" into "eadr" in eeprom
+00D5   ???? ????          M     BANKSEL TEMP_REG
+00D7   08??               M     MOVFW TEMP_REG ;move CUR_EEADR into W
+00D8   1283 1703          M     BANKSEL EEADR
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00DA   008D               M     MOVWF EEADR     ;move W into EEADR
+00DB   1283 1303          M     BANKSEL PORTC
+00DD   08??               M     MOVFW LOG_COUNT ;move our data into W
+00DE   1283 1703          M     BANKSEL EEDAT
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00E0   008C               M     MOVWF EEDAT     ;move W into EEDAT
+00E1   1683 1703          M     BANKSEL EECON1
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00E3   138C               M     BCF EECON1, EEPGD;data memory
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00E4   150C               M     BSF EECON1, WREN;enable writes    
+                          M     
+00E5   3055               M     MOVLW 0x55
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00E6   008D               M     MOVWF EECON2    ;write 0x55 to EECON2
+00E7   30AA               M     MOVLW 0xAA
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00E8   008D               M     MOVWF EECON2    ;write 0xAA to EECON2
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00E9   148C               M     BSF EECON1,WR   ;begin write
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE 10
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                          M     
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00EA   188C               M     BTFSC EECON1,WR ;check for end of write
+00EB   2???               M     GOTO $-1        ;loop until clear(Write complete)
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00EC   110C               M     BCF EECON1, WREN;disable writes
+00ED   1283 1303          M     BANKSEL 0x00    ;move back to bank0
+                          M     
+                      00210     
+00EF   178B           00211     BSF INTCON, GIE ;enable interrupts
+00F0   0008           00212     RETURN
+                      00213 ;###END#OF#CALL###
+                      00214     
+                      00215 ;*******************************************************************************
+                      00216 ; sample data - covers data sampling, and display updating if required 
+                      00217 ;*******************************************************************************
+00F1                  00218 sampledata
+                      00219     
+                      00220 ;--------------------------------
+                      00221 ;sample temperature
+                      00222 ;--------------------------------
+00F1   1283 1303      00223     BANKSEL ADCON0
+00F3   3091           00224     MOVLW b'10010001'                   ;right justify
+00F4   009F           00225     MOVWF ADCON0                        ;Vdd,AN4, on
+                      00226 
+                      00227     ;6uS delay
+00F5   0000           00228     nop
+00F6   0000           00229     nop
+00F7   0000           00230     nop
+00F8   0000           00231     nop
+00F9   0000           00232     nop
+00FA   0000           00233     nop
+                      00234     
+00FB   149F           00235     BSF ADCON0,GO       ;start conversion
+00FC   189F           00236     BTFSC ADCON0,GO     ;are we done the conversion?
+00FD   2???           00237     GOTO $-1            ;try again if not
+                      00238 
+00FE   1003           00239     BCF STATUS,C
+00FF   1683 1303      00240     BANKSEL ADRESL
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0101   0A9E           00241     INCF ADRESL,F       ;divide by 2, rounding up
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0102   0C1E           00242     RRF ADRESL,W        ;conversion based on Vcc being about 5V
+0103   1283 1303      00243     BANKSEL PORTC
+0105   00??           00244     MOVWF CUR_TEMPERATURE   ;stored for saving to eeprom later (and for displaying)
+                      00245 
+                      00246 ;--------------------------------
+                      00247 ;sample humidity
+                      00248 ;--------------------------------
+                      00249     ;humidity is a vaguely linear value, ranging from 1V(30%) to 3V(90%)
+                      00250     ;for every 10% there is 0.33V so 1% is 33mV.
+                      00251     ;thus we require ADC conversions to have minimum step of at most 33mV (preferably half this)
+                      00252     ;desirable step size = 16mv per step.
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE 11
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                      00253     
+                      00254 ;--------------------------------
+                      00255 ;obtain time
+                      00256 ;--------------------------------    
+                      00257     ;get time via i2c from the RTC (and go nuts with glee if it works)
+                      00258     
+                      00259     
+0106   0008           00260     RETURN
+                      00261 ;###END#OF#CALL###
+                      00262     
+                      00263 ;*******************************************************************************
+                      00264 ; LCD write data - writes data in LCD_BUFFER to the LCD 
+                      00265 ;*******************************************************************************
+0107                  00266 lcd.data
+0107   2???           00267     CALL test_busy_flag             ;outputs in bank0, write mode
+0108   1606           00268     BSF PORTB,4                     ;set to command mode
+0109   0E??           00269     SWAPF LCD_BUFFER,W              ;move LCD_BUFFER<4:7> to W<0:3>
+010A   2???           00270     CALL lcd.write                          ;write W<0:3> to LCD<4:7>
+                      00271     
+010B   2???           00272     CALL test_busy_flag             ;outputs in bank0, write mode
+010C   1606           00273     BSF PORTB,4                     ;set to command mode
+010D   08??           00274     MOVFW LCD_BUFFER                ;move LCD_BUFFER<0:3> to W<0:3>
+010E   2???           00275     CALL lcd.write                          ;write W<0:3> to LCD<4:7>
+                      00276     
+010F   0008           00277     RETURN
+                      00278 ;###END#OF#CALL###
+                      00279     
+                      00280 ;*******************************************************************************
+                      00281 ; LCD write command - writes commands to in LCD_BUFFER to the LCD 
+                      00282 ;*******************************************************************************
+0110                  00283 lcd.command
+                      00284 
+0110   2???           00285     CALL test_busy_flag             ;outputs in bank0, write mode
+0111   1207           00286     BCF PORTC,4                     ;set to command mode
+0112   0E??           00287     SWAPF LCD_BUFFER,W              ;move LCD_BUFFER<4:7> to W<0:3>
+0113   2???           00288     CALL lcd.write                          ;write W<0:3> to LCD<4:7>
+                      00289     
+0114   2???           00290     CALL test_busy_flag             ;outputs in bank0, write mode
+0115   1207           00291     BCF PORTC,4                     ;set to command mode
+0116   08??           00292     MOVFW LCD_BUFFER                ;move LCD_BUFFER<0:3> to W<0:3>
+0117   2???           00293     CALL lcd.write                          ;write W<0:3> to LCD<4:7>
+                      00294     
+0118   0008           00295     RETURN
+                      00296 ;###END#OF#CALL###
+                      00297 
+                      00298     
+                      00299 ;*******************************************************************************
+                      00300 ;       binary -> BCD outputs W as BCD_L and BCD_H
+                      00301 ;*******************************************************************************
+0119                  00302 BINtoBCD
+                      00303                                                         
+                      00304     ;DISP_BUFF_H = quotient
+                      00305     ;DISP_BUFF_L = remainder
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE 12
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0119   01??           00306     CLRF   BCD_H                ;clear our quotient
+011A   00??           00307     MOVWF   BCD_L               ;store the number to be divided
+                      00308     
+011B   300A           00309     MOVLW   0x0A                        ;load 10 into W
+                      00310 
+011C                  00311 Div10Loop
+011C   02??           00312     SUBWF   BCD_L,1     ;subtract 10 from number
+011D   1B80           00313     BTFSC   BCD_L,7     ;test for -ve
+011E   2???           00314     GOTO    Div10Finished       ;if number is -ve, goto finshed
+                      00315     
+011F   0A??           00316     INCF    BCD_H,F
+0120   2???           00317     GOTO    Div10Loop
+                      00318 
+0121                  00319 Div10Finished
+0121   07??           00320     ADDWF   BCD_L,1     ;undo last subtraction to get remainder
+                      00321     
+0122   0008           00322     RETURN
+                      00323     
+                      00324 ;###END#OF#CALL###
+                      00325 
+                      00326     
+                      00327 ;*******************************************************************************
+                      00328 ;       tests the busy flag and exits when LCD not busy
+                      00329 ;*******************************************************************************
+0123                  00330 test_busy_flag
+                      00331 ;    Pin config: RC<0:3>    =LCD D<4:7> (datapins)                             *          
+                      00332 ;                RC4        =LCD RS     (reg select data=1 command=0)          *                   
+                      00333 ;                RC6        =LCD R/W    (write=0/read=1)                       *                        
+                               
+                      00334 ;                RC7        =LCD E      (enable=1)                             *
+                      00335     ;waits until busy flag is cleared
+                      00336     ;outputs: MCU = bank0; LCD= write mode
+0123   1683 1303      00337     BANKSEL TRISC
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0125   1587           00338     BSF TRISC,3                     ;set RC3 as input to test busy flag
+0126   1283 1303      00339     BANKSEL PORTC
+                      00340 
+                      00341     
+0128   1707           00342     BSF PORTC,6                     ;set to read mode
+0129   1207           00343     BCF PORTC,4                     ;set to command mode
+                      00344     
+012A   0000           00345     nop
+012B   1787           00346     BSF PORTC,7                     ;pulse enable bit
+012C   0000           00347     nop
+012D   0000           00348     nop
+012E   1387           00349     BCF PORTC,7
+                      00350     
+012F   1987           00351     BTFSC PORTC,3                   ;test busy flag until cleared
+0130   2???           00352     GOTO $-6
+                      00353     
+0131   1683 1303      00354     BANKSEL TRISC
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0133   1187           00355     BCF TRISC,3                     ;set RC3 as output
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE 13
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0134   1283 1303      00356     BANKSEL PORTC
+                      00357     
+0136   1707           00358     BSF PORTC,6
+0137   0008           00359     RETURN
+                      00360     
+                      00361 ;###END#OF#CALL###
+                      00362 
+                      00363 ;*******************************************************************************
+                      00364 ;       performs the write actions for the LCD
+                      00365 ;*******************************************************************************
+                      00366 
+0138                  00367 lcd.write
+                      00368 ;writes to LCD, moves WREG<0:3> -> PORTC<0:3> == LCD DB<4:7>
+                      00369 ;does not set RS (RB4) or R/W (RB5)
+                      00370     
+0138   1283 1303      00371     BANKSEL PORTC
+013A   00??           00372     MOVWF TEMP_REG  ;save W to be loaded back later
+                      00373     
+                      00374     ;bitmask lower nibble of W onto PORTC
+013B   390F           00375     ANDLW 0x0F      ;clear MSB of W
+013C   0487           00376     IORWF PORTC,F   ;output 1's from W_L to PORTC
+013D   3AF0           00377     XORLW 0xF0      ;set MSB of W
+013E   0587           00378     ANDWF PORTC,F   ;output 0's from W_L to PORTC
+                      00379     
+                      00380     ;toggle enable
+013F   1787           00381     BSF PORTC,7     ;toggle enable on
+0140   0000           00382     nop
+0141   0000           00383     nop
+0142   1387           00384     BCF PORTC,7     ;toggle enable off
+                      00385     
+0143   08??           00386     MOVFW TEMP_REG  ;restore W
+0144   0008           00387     RETURN
+                      00388     
+                      00389 ;###END#OF#CALL###
+                      00390     
+3FF7                  00391     END
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE 14
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+ABDEN                             00000000
+ABDOVF                            00000007
+ADCON0                            0000001F
+ADCON1                            0000009F
+ADCS0                             00000004
+ADCS1                             00000005
+ADCS2                             00000006
+ADDEN                             00000003
+ADFM                              00000007
+ADIE                              00000006
+ADIF                              00000006
+ADON                              00000000
+ADRESH                            0000001E
+ADRESL                            0000009E
+ANS0                              00000000
+ANS1                              00000001
+ANS10                             00000002
+ANS11                             00000003
+ANS2                              00000002
+ANS3                              00000003
+ANS4                              00000004
+ANS5                              00000005
+ANS6                              00000006
+ANS7                              00000007
+ANS8                              00000000
+ANS9                              00000001
+ANSEL                             0000011E
+ANSELH                            0000011F
+BAUDCTL                           0000009B
+BCD_H                             0000000A
+BCD_L                             0000000B
+BF                                00000000
+BINtoBCD                          00000119
+BRG0                              00000000
+BRG1                              00000001
+BRG10                             00000002
+BRG11                             00000003
+BRG12                             00000004
+BRG13                             00000005
+BRG14                             00000006
+BRG15                             00000007
+BRG16                             00000003
+BRG2                              00000002
+BRG3                              00000003
+BRG4                              00000004
+BRG5                              00000005
+BRG6                              00000006
+BRG7                              00000007
+BRG8                              00000000
+BRG9                              00000001
+BRGH                              00000002
+C                                 00000000
+C1CH0                             00000000
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE 15
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+C1CH1                             00000001
+C1IE                              00000005
+C1IF                              00000005
+C1OE                              00000005
+C1ON                              00000007
+C1OUT                             00000006
+C1POL                             00000004
+C1R                               00000002
+C1SEN                             00000005
+C1VREN                            00000007
+C2CH0                             00000000
+C2CH1                             00000001
+C2IE                              00000006
+C2IF                              00000006
+C2OE                              00000005
+C2ON                              00000007
+C2OUT                             00000006
+C2POL                             00000004
+C2R                               00000002
+C2REN                             00000004
+C2SYNC                            00000000
+C2VREN                            00000006
+CCP1CON                           00000017
+CCP1IE                            00000002
+CCP1IF                            00000002
+CCP1M0                            00000000
+CCP1M1                            00000001
+CCP1M2                            00000002
+CCP1M3                            00000003
+CCPR                              00000015
+CCPR1H                            00000016
+CCPR1L                            00000015
+CHS0                              00000002
+CHS1                              00000003
+CHS2                              00000004
+CHS3                              00000005
+CKE                               00000006
+CKP                               00000004
+CM1CON0                           00000119
+CM2CON0                           0000011A
+CM2CON1                           0000011B
+CREN                              00000004
+CSRC                              00000007
+CUR_EEADR                         00000000
+CUR_HUMIDITY                      00000002
+CUR_TEMPERATURE                   00000001
+CUR_TIME_H                        00000004
+CUR_TIME_L                        00000003
+D                                 00000005
+D1                                00000008
+D2                                00000009
+DATA_ADDRESS                      00000005
+DC                                00000001
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE 16
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+DC1B0                             00000004
+DC1B1                             00000005
+D_A                               00000005
+D_NOT_A                           00000005
+Div10Finished                     00000121
+Div10Loop                         0000011C
+ECCPAS                            0000001D
+ECCPAS0                           00000004
+ECCPAS1                           00000005
+ECCPAS2                           00000006
+ECCPASE                           00000007
+EEADR                             0000010D
+EEADRH                            0000010F
+EECON1                            0000018C
+EECON2                            0000018D
+EEDAT                             0000010C
+EEDATA                            0000010C
+EEDATH                            0000010E
+EEIE                              00000004
+EEIF                              00000004
+EEPGD                             00000007
+F                                 00000001
+FERR                              00000002
+FSR                               00000004
+GIE                               00000007
+GO                                00000001
+GO_DONE                           00000001
+GO_NOT_DONE                       00000001
+HTS                               00000002
+I2C_DATA                          00000005
+I2C_READ                          00000002
+I2C_START                         00000003
+I2C_STOP                          00000004
+INDF                              00000000
+INTCON                            0000000B
+INTE                              00000004
+INTEDG                            00000006
+INTF                              00000001
+IOC                               00000096
+IOC0                              00000000
+IOC1                              00000001
+IOC2                              00000002
+IOC3                              00000003
+IOC4                              00000004
+IOC5                              00000005
+IOCA                              00000096
+IOCA0                             00000000
+IOCA1                             00000001
+IOCA2                             00000002
+IOCA3                             00000003
+IOCA4                             00000004
+IOCA5                             00000005
+IOCB                              00000116
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE 17
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+IOCB4                             00000004
+IOCB5                             00000005
+IOCB6                             00000006
+IOCB7                             00000007
+IRCF0                             00000004
+IRCF1                             00000005
+IRCF2                             00000006
+IRP                               00000007
+LCD_BUFFER                        00000007
+LOG_COUNT                         00000005
+LTS                               00000001
+MC1OUT                            00000007
+MC2OUT                            00000006
+MSK                               00000093
+MSK0                              00000000
+MSK1                              00000001
+MSK2                              00000002
+MSK3                              00000003
+MSK4                              00000004
+MSK5                              00000005
+MSK6                              00000006
+MSK7                              00000007
+NOT_A                             00000005
+NOT_ADDRESS                       00000005
+NOT_BOR                           00000000
+NOT_DONE                          00000001
+NOT_PD                            00000003
+NOT_POR                           00000001
+NOT_RABPU                         00000007
+NOT_T1SYNC                        00000002
+NOT_TO                            00000004
+NOT_W                             00000002
+NOT_WRITE                         00000002
+OERR                              00000001
+OPTION_REG                        00000081
+OSCCON                            0000008F
+OSCTUNE                           00000090
+OSFIE                             00000007
+OSFIF                             00000007
+OSTS                              00000003
+P                                 00000004
+P1M0                              00000006
+P1M1                              00000007
+PCL                               00000002
+PCLATH                            0000000A
+PCON                              0000008E
+PDC0                              00000000
+PDC1                              00000001
+PDC2                              00000002
+PDC3                              00000003
+PDC4                              00000004
+PDC5                              00000005
+PDC6                              00000006
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE 18
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+PEIE                              00000006
+PIE1                              0000008C
+PIE2                              0000008D
+PIR1                              0000000C
+PIR2                              0000000D
+PORTA                             00000005
+PORTB                             00000006
+PORTC                             00000007
+PR2                               00000092
+PRSEN                             00000007
+PS0                               00000000
+PS1                               00000001
+PS2                               00000002
+PSA                               00000003
+PSSAC0                            00000002
+PSSAC1                            00000003
+PSSBD0                            00000000
+PSSBD1                            00000001
+PSTRCON                           0000019D
+PULSR                             00000002
+PULSS                             00000003
+PWM1CON                           0000001C
+R                                 00000002
+RA0                               00000000
+RA1                               00000001
+RA2                               00000002
+RA3                               00000003
+RA4                               00000004
+RA5                               00000005
+RABIE                             00000003
+RABIF                             00000000
+RB4                               00000004
+RB5                               00000005
+RB6                               00000006
+RB7                               00000007
+RC0                               00000000
+RC1                               00000001
+RC2                               00000002
+RC3                               00000003
+RC4                               00000004
+RC5                               00000005
+RC6                               00000006
+RC7                               00000007
+RCIDL                             00000006
+RCIE                              00000005
+RCIF                              00000005
+RCREG                             0000001A
+RCSTA                             00000018
+RD                                00000000
+READ_WRITE                        00000002
+RP0                               00000005
+RP1                               00000006
+RX9                               00000006
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE 19
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+RX9D                              00000000
+R_NOT_W                           00000002
+R_W                               00000002
+S                                 00000003
+SBOREN                            00000004
+SCKP                              00000004
+SCS                               00000000
+SENB                              00000003
+SENDB                             00000003
+SETUP                             00000000
+SMP                               00000007
+SPBRG                             00000099
+SPBRGH                            0000009A
+SPEN                              00000007
+SR0                               00000006
+SR1                               00000007
+SRCON                             0000019E
+SREN                              00000005
+SSPADD                            00000093
+SSPBUF                            00000013
+SSPCON                            00000014
+SSPEN                             00000005
+SSPIE                             00000003
+SSPIF                             00000003
+SSPM0                             00000000
+SSPM1                             00000001
+SSPM2                             00000002
+SSPM3                             00000003
+SSPMSK                            00000093
+SSPOV                             00000006
+SSPSTAT                           00000094
+START                             00000041
+STATE                             00000006
+STATUS                            00000003
+STRA                              00000000
+STRB                              00000001
+STRC                              00000002
+STRD                              00000003
+STRSYNC                           00000004
+SWDTEN                            00000000
+SYNC                              00000004
+T0CS                              00000005
+T0IE                              00000005
+T0IF                              00000002
+T0SE                              00000004
+T1CKPS0                           00000004
+T1CKPS1                           00000005
+T1CON                             00000010
+T1GINV                            00000007
+T1GSS                             00000001
+T1IE                              00000000
+T1IF                              00000000
+T1OSCEN                           00000003
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE 20
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+T2CKPS0                           00000000
+T2CKPS1                           00000001
+T2CON                             00000012
+T2IE                              00000001
+T2IF                              00000001
+TEMP_REG                          0000000C
+TMR0                              00000001
+TMR1                              0000000E
+TMR1CS                            00000001
+TMR1GE                            00000006
+TMR1H                             0000000F
+TMR1IE                            00000000
+TMR1IF                            00000000
+TMR1L                             0000000E
+TMR1ON                            00000000
+TMR2                              00000011
+TMR2IE                            00000001
+TMR2IF                            00000001
+TMR2ON                            00000002
+TOUTPS0                           00000003
+TOUTPS1                           00000004
+TOUTPS2                           00000005
+TOUTPS3                           00000006
+TRISA                             00000085
+TRISA0                            00000000
+TRISA1                            00000001
+TRISA2                            00000002
+TRISA3                            00000003
+TRISA4                            00000004
+TRISA5                            00000005
+TRISB                             00000086
+TRISB4                            00000004
+TRISB5                            00000005
+TRISB6                            00000006
+TRISB7                            00000007
+TRISC                             00000087
+TRISC0                            00000000
+TRISC1                            00000001
+TRISC2                            00000002
+TRISC3                            00000003
+TRISC4                            00000004
+TRISC5                            00000005
+TRISC6                            00000006
+TRISC7                            00000007
+TRMT                              00000001
+TUN0                              00000000
+TUN1                              00000001
+TUN2                              00000002
+TUN3                              00000003
+TUN4                              00000004
+TX9                               00000006
+TX9D                              00000000
+TXEN                              00000005
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE 21
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+TXIE                              00000004
+TXIF                              00000004
+TXREG                             00000019
+TXSTA                             00000098
+UA                                00000001
+ULPWUE                            00000005
+VCFG                              00000006
+VP6EN                             00000004
+VR0                               00000000
+VR1                               00000001
+VR2                               00000002
+VR3                               00000003
+VRCON                             00000118
+VRR                               00000005
+W                                 00000000
+WCOL                              00000007
+WDTCON                            00000097
+WDTPS0                            00000001
+WDTPS1                            00000002
+WDTPS2                            00000003
+WDTPS3                            00000004
+WPU                               00000095
+WPU0                              00000000
+WPU1                              00000001
+WPU2                              00000002
+WPU4                              00000004
+WPU5                              00000005
+WPUA                              00000095
+WPUA0                             00000000
+WPUA1                             00000001
+WPUA2                             00000002
+WPUA4                             00000004
+WPUA5                             00000005
+WPUB                              00000115
+WPUB4                             00000004
+WPUB5                             00000005
+WPUB6                             00000006
+WPUB7                             00000007
+WR                                00000001
+WREN                              00000002
+WRERR                             00000003
+WUE                               00000001
+Z                                 00000002
+_BOD_NSLEEP                       00003EFF
+_BOD_OFF                          00003CFF
+_BOD_ON                           00003FFF
+_BOD_SBODEN                       00003DFF
+_BOREN_NSLEEP                     00003EFF
+_BOREN_OFF                        00003CFF
+_BOREN_ON                         00003FFF
+_BOREN_SBODEN                     00003DFF
+_BOR_NSLEEP                       00003EFF
+_BOR_OFF                          00003CFF
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE 22
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+_BOR_ON                           00003FFF
+_BOR_SBODEN                       00003DFF
+_CONFIG                           00002007
+_CPD_OFF                          00003FFF
+_CPD_ON                           00003F7F
+_CP_OFF                           00003FFF
+_CP_ON                            00003FBF
+_DEVID1                           00002006
+_EC_OSC                           00003FFB
+_EXTRC                            00003FFF
+_EXTRCIO                          00003FFE
+_EXTRC_OSC_CLKOUT                 00003FFF
+_EXTRC_OSC_NOCLKOUT               00003FFE
+_FCMEN_OFF                        000037FF
+_FCMEN_ON                         00003FFF
+_FOSC_EC                          00003FFB
+_FOSC_EXTRCCLK                    00003FFF
+_FOSC_EXTRCIO                     00003FFE
+_FOSC_HS                          00003FFA
+_FOSC_INTRCCLK                    00003FFD
+_FOSC_INTRCIO                     00003FFC
+_FOSC_LP                          00003FF8
+_FOSC_XT                          00003FF9
+_HS_OSC                           00003FFA
+_IDLOC0                           00002000
+_IDLOC1                           00002001
+_IDLOC2                           00002002
+_IDLOC3                           00002003
+_IESO_OFF                         00003BFF
+_IESO_ON                          00003FFF
+_INTOSC                           00003FFD
+_INTOSCIO                         00003FFC
+_INTRC_OSC_CLKOUT                 00003FFD
+_INTRC_OSC_NOCLKOUT               00003FFC
+_LP_OSC                           00003FF8
+_MAIN_PROG_000D                   0000000D
+_MAIN_PROG_000F                   0000000F
+_MAIN_PROG_0015                   00000015
+_MAIN_PROG_0017                   00000017
+_MAIN_PROG_001D                   0000001D
+_MAIN_PROG_001F                   0000001F
+_MAIN_PROG_0025                   00000025
+_MAIN_PROG_0027                   00000027
+_MAIN_PROG_002D                   0000002D
+_MAIN_PROG_002F                   0000002F
+_MAIN_PROG_0061                   00000061
+_MAIN_PROG_007C                   0000007C
+_MAIN_PROG_0097                   00000097
+_MAIN_PROG_00B2                   000000B2
+_MAIN_PROG_00CF                   000000CF
+_MAIN_PROG_00EB                   000000EB
+_MAIN_PROG_00FD                   000000FD
+_MAIN_PROG_0130                   00000130
+MPASM 5.62                    DATALOGGER.ASM   10-17-2015  23:35:01         PAGE 23
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+_MCLRE_OFF                        00003FDF
+_MCLRE_ON                         00003FFF
+_PWRTE_OFF                        00003FFF
+_PWRTE_ON                         00003FEF
+_WDTE_OFF                         00003FF7
+_WDTE_ON                          00003FFF
+_WDT_OFF                          00003FF7
+_WDT_ON                           00003FFF
+_XT_OSC                           00003FF9
+__16F690                          00000001
+__DEBUG                           
+__MPLAB_DEBUGGER_SIMULATOR        1
+delay_10_ms                       
+eeprom.store                      
+eeprom.write                      00000042
+lcd.command                       00000110
+lcd.data                          00000107
+lcd.write                         00000138
+sampledata                        000000F1
+test_busy_flag                    00000123
+
+Errors   :     0
+Warnings :     0 reported,     0 suppressed
+Messages :    63 reported,     0 suppressed
+
+
