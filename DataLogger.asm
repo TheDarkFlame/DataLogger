@@ -19,6 +19,16 @@
 ; __config 0xFFF7
  __CONFIG _FOSC_EXTRCCLK & _WDTE_OFF & _PWRTE_OFF & _MCLRE_ON & _CP_OFF & _CPD_OFF & _BOREN_ON & _IESO_ON & _FCMEN_ON
 
+ 
+ 
+;DEFINITIONS
+;PORTC: eg BSF PORTC,LCD_E
+#define	LCD_RS	4		; 0 = Command, 1 = Data
+#define LCD_RW	6		; 0 = Write, 1 = Read
+#define LCD_E	7		
+#define LCD_BF	3		; LCD_D7 = BF in read mode
+ 
+;REGISTERS
 variables udata
 CUR_EEADR   res 1	    ;stores value of current EEADR + 1 (for cycling through EEDAT)
 CUR_TEMPERATURE res 1	    ;stores temperature we are currently working with
@@ -129,10 +139,13 @@ SETUP
     ;currently in 8-bit, move into 4-bit
     
     CALL test_busy_flag		    ;outputs in bank0, write mode
-    BCF PORTC,4			    ;set to command mode
     MOVLW b'00000010'		    ;4-bit mode
-    CALL lcd.write			    ;write W<0:3> to LCD<4:7>
-    
+    MOVWF PORTC
+    BSF PORTC,LCD_E			    ;toggle enable pin
+    nop
+    nop
+    BCF PORTC,LCD_E
+
     MOVLW b'00001111'		    ;00001DCB Display=on Blinking=on Cursor=on
     MOVWF LCD_BUFFER		    ;move command into buffer
     CALL lcd.command		    ;send command
@@ -263,33 +276,24 @@ sampledata
     
 ;*******************************************************************************
 ; LCD write data - writes data in LCD_BUFFER to the LCD 
+; LCD write command - writes commands to in LCD_BUFFER to the LCD
+;
+; note only difference is: data mode sets RC4, command mode clears RC4
 ;*******************************************************************************
+
+;this controls whether it is data or command
 lcd.data
     CALL test_busy_flag		    ;outputs in bank0, write mode
-    BSF PORTB,4			    ;set to command mode
-    SWAPF LCD_BUFFER,W		    ;move LCD_BUFFER<4:7> to W<0:3>
-    CALL lcd.write			    ;write W<0:3> to LCD<4:7>
-    
-    CALL test_busy_flag		    ;outputs in bank0, write mode
-    BSF PORTB,4			    ;set to command mode
-    MOVFW LCD_BUFFER		    ;move LCD_BUFFER<0:3> to W<0:3>
-    CALL lcd.write			    ;write W<0:3> to LCD<4:7>
-    
-    RETURN
-;###END#OF#CALL###
-    
-;*******************************************************************************
-; LCD write command - writes commands to in LCD_BUFFER to the LCD 
-;*******************************************************************************
+    BSF PORTC,LCD_RS			    ;set to data mode
+    GOTO $+3
 lcd.command
-
     CALL test_busy_flag		    ;outputs in bank0, write mode
-    BCF PORTC,4			    ;set to command mode
+    BCF PORTC,LCD_RS			    ;set to command mode
+;part below this is the write part of lcd.data and lcd.command
+    
     SWAPF LCD_BUFFER,W		    ;move LCD_BUFFER<4:7> to W<0:3>
     CALL lcd.write			    ;write W<0:3> to LCD<4:7>
     
-    CALL test_busy_flag		    ;outputs in bank0, write mode
-    BCF PORTC,4			    ;set to command mode
     MOVFW LCD_BUFFER		    ;move LCD_BUFFER<0:3> to W<0:3>
     CALL lcd.write			    ;write W<0:3> to LCD<4:7>
     
@@ -336,27 +340,27 @@ test_busy_flag
     ;waits until busy flag is cleared
     ;outputs: MCU = bank0; LCD= write mode
     BANKSEL TRISC
-    BSF TRISC,3			    ;set RC3 as input to test busy flag
+    BSF TRISC,LCD_BF			    ;set RC3 as input to test busy flag
     BANKSEL PORTC
 
     
-    BSF PORTC,6			    ;set to read mode
-    BCF PORTC,4			    ;set to command mode
+    BSF PORTC,LCD_RW			    ;set to read mode
+    BCF PORTC,LCD_RS			    ;set to command mode
     
     nop
-    BSF PORTC,7			    ;pulse enable bit
+    BSF PORTC,LCD_E			    ;pulse enable bit
     nop
     nop
-    BCF PORTC,7
+    BCF PORTC,LCD_E
     
-    BTFSC PORTC,3		    ;test busy flag until cleared
+    BTFSC PORTC,LCD_BF		    ;test busy flag until cleared
     GOTO $-6
     
     BANKSEL TRISC
-    BCF TRISC,3			    ;set RC3 as output
+    BCF TRISC,LCD_BF			    ;set RC3 as output
     BANKSEL PORTC
     
-    BSF PORTC,6
+    BCF PORTC,LCD_RW			    ;back into write mode
     RETURN
     
 ;###END#OF#CALL###
@@ -379,10 +383,10 @@ lcd.write
     ANDWF PORTC,F   ;output 0's from W_L to PORTC
     
     ;toggle enable
-    BSF PORTC,7	    ;toggle enable on
+    BSF PORTC,LCD_E	    ;toggle enable on
     nop
     nop
-    BCF PORTC,7	    ;toggle enable off
+    BCF PORTC,LCD_E	    ;toggle enable off
     
     MOVFW TEMP_REG  ;restore W
     RETURN
