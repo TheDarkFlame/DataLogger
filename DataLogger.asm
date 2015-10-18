@@ -6,10 +6,10 @@
 ;    Author:                                                                   *
 ;    Company:                                                                  *
 ;    Description:                                                              *
-;    Pin config: RC<0:7>    =LCD D<0:7>	(datapins)                             *          
-;		 RB4	    =LCD RS	(reg select data=1 command=0)	       *	           
-;		 RB5	    =LCD R/W	(write=1/read=0)		       *		           
-;		 RB6	    =LCD E	(enable=1)			       *
+;    Pin config: RC<0:3>    =LCD D<4:7>	(datapins)                             *          
+;		 RC4	    =LCD RS	(reg select data=1 command=0)	       *	           
+;		 RC6	    =LCD R/W	(write=0/read=1)		       *		           
+;		 RC7	    =LCD E	(enable=1)			       *
 ;                                                                              *    
 ;                                                                              *    
 ;*******************************************************************************
@@ -59,42 +59,7 @@ delay_10_ms macro
     GOTO $-4	;reset D1
     ENDM
 ;-------------------------------------------------------------------------------
-test_busy_flag macro
-    ;waits until busy flag is cleared
-    ;outputs: MCU = bank0; LCD= write mode
-    BANKSEL TRISC
-    BSF TRISC,7			    ;set RC7 as input to test busy flag
-    BANKSEL PORTC
-    BSF PORTB,5			    ;set to read mode
-    BCF PORTB,4			    ;set to command mode
-    
-    nop
-    BSF PORTB,6			    ;pulse enable bit
-    nop
-    nop
-    BCF PORTB,6
-    
-    BTFSC PORTC,7		    ;test busy flag until cleared
-    GOTO $-6
-    
-    BCF	PORTB,5			    ;set back to write mode
-    BANKSEL TRISC
-    BCF TRISC,7			    ;set RC7 as output
-    BANKSEL PORTB
-    
-    ENDM
-;-------------------------------------------------------------------------------
-lcd.write macro
-;writes to LCD, moves WREG->LCD DB<0:7>
-;does not set RS (RB4) or R/W (RB5)
-    BANKSEL PORTC
-    MOVWF PORTC	    ;output data to LCD
-    BSF PORTB,6	    ;toggle enable on
-    nop
-    nop
-    BCF PORTB,6	    ;toggle enable off
-    
-    ENDM
+
     
 ;-------------------------------------------------------------------------------
 eeprom.store macro edata, eadr
@@ -139,17 +104,15 @@ SETUP
 ;-------------------------------------------------------------------------------
 ;LCD setup
 ;-------------------------------------------------------------------------------
-;    Pin config: RC<0:8>    =LCD D<0:7>	(dataout)                                        
-;		 RB4	    =LCD RS	(reg select)					           
-;		 RB5	    =LCD R/W	(write/read)					           
-;		 RB6	    =LCD E	(enable)					       
+;    Pin config: RC<0:3>    =LCD D<4:7>	(datapins)                             *          
+;		 RC4	    =LCD RS	(reg select data=1 command=0)	       *	           
+;		 RC6	    =LCD R/W	(write=0/read=1)		       *		           
+;		 RC7	    =LCD E	(enable=1)			       *
     
     MOVLW 0xff
     BANKSEL TRISC
     MOVWF TRISC			    ;set PORTC as input so we don't mess with initialization
-    BANKSEL TRISB
-    MOVWF TRISB			    ;set PORTB as input so we don't mess with initialization
-
+    
     delay_10_ms
     delay_10_ms
     delay_10_ms
@@ -159,20 +122,18 @@ SETUP
  
     BANKSEL TRISC
     CLRF TRISC			    ;set PORTC as output
-    BANKSEL TRISB
-    CLRF TRISB			    ;set PORTB as output
     
     BANKSEL PORTC
     CLRF PORTC			    ;set default state
-    CLRF PORTB			    ;set default state
     
+    ;currently in 8-bit, move into 4-bit
     
-    MOVLW b'00111000'		    ;001DNFxx D(8bit)=1 N(2line)=1 F(5x11 or 5x8)=0
-    MOVWF LCD_BUFFER		    ;move command into buffer
-    CALL lcd.command		    ;send command
+    CALL test_busy_flag		    ;outputs in bank0, write mode
+    BCF PORTC,4			    ;set to command mode
+    MOVLW b'00000010'		    ;4-bit mode
+    CALL lcd.write			    ;write W<0:3> to LCD<4:7>
     
-    
-    MOVLW b'00001111'		    ;00001DCB Display=on Blinking=off Cursor=off
+    MOVLW b'00001111'		    ;00001DCB Display=on Blinking=on Cursor=on
     MOVWF LCD_BUFFER		    ;move command into buffer
     CALL lcd.command		    ;send command
 ;-------------------------------------------------------------------------------
@@ -303,11 +264,15 @@ sampledata
 ; LCD write data - writes data in LCD_BUFFER to the LCD 
 ;*******************************************************************************
 lcd.data
-    test_busy_flag		    ;outputs in bank0, write mode
+    CALL test_busy_flag		    ;outputs in bank0, write mode
+    BSF PORTB,4			    ;set to command mode
+    SWAPF LCD_BUFFER,W		    ;move LCD_BUFFER<4:7> to W<0:3>
+    CALL lcd.write			    ;write W<0:3> to LCD<4:7>
     
-    BSF PORTB,4			    ;set to data mode
-    MOVFW LCD_BUFFER		    ;move LCD buffer into W
-    lcd.write			    ;write data to LCD
+    CALL test_busy_flag		    ;outputs in bank0, write mode
+    BSF PORTB,4			    ;set to command mode
+    MOVFW LCD_BUFFER		    ;move LCD_BUFFER<0:3> to W<0:3>
+    CALL lcd.write			    ;write W<0:3> to LCD<4:7>
     
     RETURN
 ;###END#OF#CALL###
@@ -317,11 +282,15 @@ lcd.data
 ;*******************************************************************************
 lcd.command
 
-    test_busy_flag		    ;outputs in bank0, write mode
+    CALL test_busy_flag		    ;outputs in bank0, write mode
+    BCF PORTC,4			    ;set to command mode
+    SWAPF LCD_BUFFER,W		    ;move LCD_BUFFER<4:7> to W<0:3>
+    CALL lcd.write			    ;write W<0:3> to LCD<4:7>
     
-    BCF PORTB,4			    ;set to command mode
-    MOVFW LCD_BUFFER		    ;move LCD buffer into W
-    lcd.write			    ;write data to LCD
+    CALL test_busy_flag		    ;outputs in bank0, write mode
+    BCF PORTC,4			    ;set to command mode
+    MOVFW LCD_BUFFER		    ;move LCD_BUFFER<0:3> to W<0:3>
+    CALL lcd.write			    ;write W<0:3> to LCD<4:7>
     
     RETURN
 ;###END#OF#CALL###
@@ -354,4 +323,69 @@ Div10Finished
     
 ;###END#OF#CALL###
 
+    
+;*******************************************************************************
+;	tests the busy flag and exits when LCD not busy
+;*******************************************************************************
+test_busy_flag
+;    Pin config: RC<0:3>    =LCD D<4:7>	(datapins)                             *          
+;		 RC4	    =LCD RS	(reg select data=1 command=0)	       *	           
+;		 RC6	    =LCD R/W	(write=0/read=1)		       *		           
+;		 RC7	    =LCD E	(enable=1)			       *
+    ;waits until busy flag is cleared
+    ;outputs: MCU = bank0; LCD= write mode
+    BANKSEL TRISC
+    BSF TRISC,3			    ;set RC3 as input to test busy flag
+    BANKSEL PORTC
+
+    
+    BSF PORTC,6			    ;set to read mode
+    BCF PORTC,4			    ;set to command mode
+    
+    nop
+    BSF PORTC,7			    ;pulse enable bit
+    nop
+    nop
+    BCF PORTC,7
+    
+    BTFSC PORTC,3		    ;test busy flag until cleared
+    GOTO $-6
+    
+    BANKSEL TRISC
+    BCF TRISC,3			    ;set RC3 as output
+    BANKSEL PORTC
+    
+    BSF PORTC,6
+    RETURN
+    
+;###END#OF#CALL###
+
+;*******************************************************************************
+;	performs the write actions for the LCD
+;*******************************************************************************
+
+lcd.write
+;writes to LCD, moves WREG<0:3> -> PORTC<0:3> == LCD DB<4:7>
+;does not set RS (RB4) or R/W (RB5)
+    
+    BANKSEL PORTC
+    MOVWF TEMP_REG  ;save W to be loaded back later
+    
+    ;bitmask lower nibble of W onto PORTC
+    ANDLW 0x0F	    ;clear MSB of W
+    IORWF PORTC,F   ;output 1's from W_L to PORTC
+    XORLW 0xF0	    ;set MSB of W
+    ANDWF PORTC,F   ;output 0's from W_L to PORTC
+    
+    ;toggle enable
+    BSF PORTC,7	    ;toggle enable on
+    nop
+    nop
+    BCF PORTC,7	    ;toggle enable off
+    
+    MOVFW TEMP_REG  ;restore W
+    RETURN
+    
+;###END#OF#CALL###
+    
     END
