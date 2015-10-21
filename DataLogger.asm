@@ -12,8 +12,12 @@
 ;		 RC7	    =LCD E	(enable=1)			       *
 ;                RB4	    =Temperature sensor                                *    
 ;                RB5        =Humidity sensor                                   *    
-;                RA0        =Button	                                       *    
-;                RA1        =Button	                                       *    
+;                RA0        =ButtonDown	                                       *    
+;                RA1        =ButtonUp	                                       *    
+;                RA2        =RTC CE pin	                                       *    
+;                RC1        =RTC IO pin	                                       *    
+;                RC0        =RTC SCLK pin	                               *    
+;   note that RC0 and RC1 are dual bound, but the bindings will never conflict *    
 ;*******************************************************************************
 #include "p16F690.inc"
 
@@ -29,25 +33,43 @@
 #define LCD_RW	6		; 0 = Write, 1 = Read
 #define LCD_E	7		
 #define LCD_BF	3		; LCD_D7 = BF in read mode
+#define Button_Down PORTA,0
+#define Button_Up PORTA,1
+#define RTC_CE PORTA,2
+#define RTC_IO PORTC,1
+#define RTC_SCLK PORTC,0
  
 ;REGISTERS
 variables udata
-CUR_EEADR   res 1	    ;stores value of current EEADR + 1 (for cycling through EEDAT)
-CUR_TEMPERATURE res 1	    ;stores temperature we are currently working with
-CUR_HUMIDITY	res 1	    ;stores humidity we are currently working with
-CUR_TIME_L  res 1	    ;stores minutes we are currently working with
-CUR_TIME_H  res	1	    ;stores hours we are currently working with
+READ_EEADR   res 1	    ;stores value of current EEADR + 1 (for cycling through EEDAT)
+READ_TEMPERATURE res 1	    ;stores last temperature we read from the sensor
+READ_HUMIDITY	res 1	    ;stores last humidity we read from the sensor
+READ_TIME_L  res 1	    ;stores minutes we last read from the RTC
+READ_TIME_H  res 1	    ;stores hours we last read from the RTC
+
+CUR_EEADR  res 1	    ;working eeadr (eg for displaying)
+CUR_TEMPERATURE res 1	    ;working temperature
+CUR_HUMIDITY	res 1	    ;working humidity
+CUR_TIME_L  res 1	    ;working minutes
+CUR_TIME_H  res 1	    ;working hours
+  
 LOG_COUNT   res 1	    ;number of logs we have in memory (63 max)
 STATE	res 1		    ;state register
+RTC_BUFFER res 1	    ;working register to aid getting serial IO  
 LCD_BUFFER res 1	    ;stores whatever we want to put on the LCD right now
 ;-------x		    ;mode bit 1=playback 0=display
 ;------x-		    ;button_up state 0=released 1=pressed
 ;-----x--		    ;button_up state 0=released 1=pressed
 D1  res 1		    ;delay register 1
 D2  res 1		    ;delay resgiter 2
+TD1 res 1		    ;timer delay register 1
+TD2 res 1		    ;timer delay register 2
 BCD_H res 1		    ;register used for bin->BCD (high byte)
 BCD_L res 1		    ;register used for bin->BCD (low byte)
 TEMP_REG res 1		    ;temporary register
+ 
+ 
+ 
 RES_VECT  CODE    0x0000            ; processor reset vector
     GOTO    SETUP                   ; go to beginning of program
 
@@ -77,7 +99,7 @@ delay_10_ms macro
 eeprom.store macro edata, eadr
  ;does the eeprom store command, simple saves "edata" into "eadr" in eeprom
     BANKSEL eadr
-    MOVFW eadr ;move CUR_EEADR into W
+    MOVFW eadr ;move READ_EEADR into W
     BANKSEL EEADR
     MOVWF EEADR	    ;move W into EEADR
     BANKSEL PORTC
@@ -104,18 +126,35 @@ eeprom.store macro edata, eadr
 ;###END#OF#MACROS###
     
 ;*******************************************************************************
+; ISRs
+;*******************************************************************************
+ISR       CODE    0x0004    ;interrupts start at 0x0004
+    BTFSC INTCON,T0IF	 				 
+    CALL TMR0_ISR	    ; check if ISR is for TMR0	 
+    RETFIE
+;end ISR
+    
+    
+TMR0_ISR
+    
+    
+    
+    BCF INTCON,T0IF	    ;clear interrupt flag
+    RETURN
+;###END#OF#ISRs###
+    
+;*******************************************************************************
 ; MAIN PROGRAM
 ;*******************************************************************************
-
-MAIN_PROG CODE                      ; let linker place main program
+MAIN_PROG CODE		    ; let linker place main program
 SETUP
 
     BANKSEL ANSEL
-    CLRF ANSEL	    ;set pins to digital
+    CLRF ANSEL		    ;set pins to digital
     CLRF ANSELH
     ;set RB4 and RB5 to Analogue
-    BSF ANSELH,2    ;AN10 note ANSELH<0:3> = AN<8:11>
-    BSF ANSELH,3    ;AN11
+    BSF ANSELH,2	    ;AN10 note ANSELH<0:3> = AN<8:11>
+    BSF ANSELH,3	    ;AN11
 ;-------------------------------------------------------------------------------
 ;LCD setup
 ;-------------------------------------------------------------------------------
@@ -166,7 +205,6 @@ SETUP
     BSF TRISB,5	    ;humidity sensor=input
     
     
-    
 ;=============ADC config================
     ;most code here is based on the datasheet's example code
     BANKSEL ADCON1
@@ -177,8 +215,22 @@ SETUP
  
     ;delay by 50ms for the LCD to initialize
 
-
-
+    ;set the timer up for counting
+    BANKSEL OPTION_REG						     
+    MOVLW b'00000111'
+    MOVWF OPTION_REG 
+    ;xxx0xxxx	internal oscilator/4 = clock base
+    ;xxxx0xxx	use prescaler
+    ;xxxxx111	set prescalter=256
+    
+    BANKSEL INTCON
+    BSF INTCON, T0IE			;enable TMR0 interrupts
+    MOVLW .217				; configured for 10ms delay (256=65ms according to stopwatch)
+    MOVWF TMR0
+    
+    
+    BSF INTCON, GIE			;enable global interrupts
+    
 START
 
    
@@ -196,43 +248,43 @@ eeprom.write
     BCF INTCON, GIE ;disable interrupts
     ;EEDATA structure:
     ;0->251 =	log
-    ;		252=CUR_EEADR  address accessed
+    ;		252=READ_EEADR  address accessed
     ;		253=LOG_COUNT  number of entries in storage (max=63)
     
     BANKSEL 0x00    ;move to bank0
     
 ;check here if the value is 252, if 252, reset to 0
     MOVLW .252
-    SUBWF CUR_EEADR,W
-    BTFSC STATUS,Z  ;if Z=set (CUR_EEADR=252) then set CUR_EEADR to 0
-    CLRF CUR_EEADR  ;set CUR_EEADR=0
+    SUBWF READ_EEADR,W
+    BTFSC STATUS,Z  ;if Z=set (READ_EEADR=252) then set READ_EEADR to 0
+    CLRF READ_EEADR  ;set READ_EEADR=0
 
     
 ;store temperature
-    eeprom.store CUR_TEMPERATURE, CUR_EEADR    ;writes CUR_TEMPERATURE to CUR_EEADR
-    INCF CUR_EEADR,F
+    eeprom.store READ_TEMPERATURE, READ_EEADR    ;writes READ_TEMPERATURE to READ_EEADR
+    INCF READ_EEADR,F
     
 ;store humidity
-    eeprom.store CUR_HUMIDITY, CUR_EEADR    ;writes CUR_HUMIDITY to CUR_EEADR
-    INCF CUR_EEADR,F
+    eeprom.store READ_HUMIDITY, READ_EEADR    ;writes READ_HUMIDITY to READ_EEADR
+    INCF READ_EEADR,F
     
 ;store minutes
-    eeprom.store CUR_TIME_L, CUR_EEADR    ;writes CUR_TIME_L to CUR_EEADR
-    INCF CUR_EEADR,F
+    eeprom.store READ_TIME_L, READ_EEADR    ;writes READ_TIME_L to READ_EEADR
+    INCF READ_EEADR,F
     
 ;store hours
-    eeprom.store CUR_TIME_H, CUR_EEADR    ;writes CUR_TIME_H to CUR_EEADR
-    INCF CUR_EEADR,F  
+    eeprom.store READ_TIME_H, READ_EEADR    ;writes READ_TIME_H to READ_EEADR
+    INCF READ_EEADR,F  
     
 ;store current address
     MOVLW .252
     MOVWF TEMP_REG
-    eeprom.store CUR_EEADR,TEMP_REG    ;writes CUR_EEADR to .252
+    eeprom.store READ_EEADR,TEMP_REG    ;writes READ_EEADR to .252
     
 ;store number of entries
     MOVLW .253
     MOVWF TEMP_REG
-    eeprom.store LOG_COUNT,TEMP_REG    ;writes CUR_EEADR to .252
+    eeprom.store LOG_COUNT,TEMP_REG    ;writes READ_EEADR to .252
     
     BSF INTCON, GIE ;enable interrupts
     RETURN
@@ -267,7 +319,7 @@ sampledata
     INCF ADRESL,F	;divide by 2, rounding up
     RRF ADRESL,W	;conversion based on Vcc being about 5V
     BANKSEL PORTC
-    MOVWF CUR_TEMPERATURE   ;stored for saving to eeprom later (and for displaying)
+    MOVWF READ_TEMPERATURE   ;stored for saving to eeprom later (and for displaying)
 
 ;--------------------------------
 ;sample humidity
@@ -295,9 +347,9 @@ sampledata
 
     BCF STATUS,C
     BANKSEL ADRESL
-    MOVFW ADRESL,F	;divide by 2, rounding up
+    MOVFW ADRESL	;get value from humidity sensor
     BANKSEL PORTC
-    MOVWF CUR_HUMIDITY   ;stored for saving to eeprom later (and for displaying)
+    MOVWF READ_HUMIDITY   ;stored for saving to eeprom later (and for displaying)
     
 ;--------------------------------
 ;obtain time
@@ -406,7 +458,8 @@ test_busy_flag
 lcd.write
 ;writes to LCD, moves WREG<0:3> -> PORTC<0:3> == LCD DB<4:7>
 ;does not set RS (RB4) or R/W (RB5)
-    
+    BANKSEL TRISC
+    CLRF TRISC	    ;set PORTC as output
     BANKSEL PORTC
     MOVWF TEMP_REG  ;save W to be loaded back later
     
@@ -426,5 +479,134 @@ lcd.write
     RETURN
     
 ;###END#OF#CALL###
+
+    
+;*******************************************************************************
+;	writes values to the RTC
+;writes CUR_TIME_H, CUR_TIME_L to RTC
+;*******************************************************************************
+;needs a re-write to improve efficiency (only write to registers used)
+RTC.write
+    ;we do a burst write to the RTC
+    ;NOTE::: we send in order of LSB->MSB
+
+    BCF RTC_SCLK
+    BCF RTC_CE
+    
+    BANKSEL TRISA
+    BCF TRISA,2	;set RTC CE output
+    BCF TRISC,0	;set RTC SCLK output
+    BCF TRISC,1	;set RTC IO output
+    BANKSEL PORTC
+    
+    BSF RTC_CE			;enable TX
+    ;---------------------------------------------------------------------------
+    ;first we must clear the write protect bit
+    MOVLW b'10010000'		;1,calendar/clock,burst mode,write
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    MOVLW b'00000000'		;write protect=0
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    BCF RTC_CE			;end TX
+    
+    ;we now can write the the device.
+    BSF RTC_CE			;enable TX
+    ;---------------------------------------------------------------------------
+    MOVLW b'10111110'		;1,calendar/clock,burst mode,write
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    MOVLW b'00000000'		;Clock Halt=0,10seconds=0,seconds=0
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    ;function to get Minutes as BCD xHHHLLLL H=10's L=1's
+    MOVFW CUR_TIME_L	    ;move value to write into W
+    CALL BINtoBCD	    ;outputs W into BCD_L and BCD_H
+    SWAPF BCD_H,F	    ;get BCD_H as HHHH0000
+    
+    MOVFW BCD_L		    ;start with W=0000LLLL
+    IORWF BCD_H,W	    ;now get	W=HHHHLLLL
+    ;note that HHHH will always be of the form 0HHH since H<=6
+    ;so W= 0HHHLLLL which is what our goal is
+    
+    MOVWF RTC_BUFFER	    ;0,10minutes,minutes
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    ;function to get Hours as BCD 10HHLLLL H=10's L=1's (24hr format)
+    MOVFW CUR_TIME_H	    ;move value to write into W
+    CALL BINtoBCD	    ;outputs W into BCD_L and BCD_H
+    SWAPF BCD_H,F	    ;get BCD_H as HHHH0000
+    
+    MOVFW BCD_L		    ;start with W=0000LLLL
+    IORWF BCD_H,W	    ;now get	W=HHHHLLLL
+    ;note that HHHH will always be of the form 00HH since H<=2
+    ;so W= 00HHLLLL which is what our goal is
+    
+    MOVWF RTC_BUFFER	    ;0,0,10hours,hours as desired
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    MOVLW b'00000001'		;date=1
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    MOVLW b'00000001'		;month=1
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    MOVLW b'00000001'		;day=1
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    MOVLW b'00000000'		;year=0
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    MOVLW b'10000000'		;write protect=1
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    BCF RTC_CE			;end TX
+    RETURN
+    
+;###END#OF#CALL###    
+
+;*******************************************************************************
+;	serial transfer for RTC write
+;*******************************************************************************
+RTC.write.TX    
+;this function is a serial transmit
+;it sends a byte 1 by 1 out onto the RTC IO pin
+;also controls SCLK behaviour required for the serial TX
+    CLRF TEMP_REG
+    BSF TEMP_REG,3		;TEMP_REG=8
+    
+RTC.write.TX.loop    
+    BTFSS RTC_BUFFER,0		;test RTC_BUFFER LSB
+    GOTO $+3
+    BSF RTC_IO			;set RTC_IO if RTC_BUFFER LSB=set
+    GOTO $+2
+    BCF RTC_IO			;clear RTC_IO if RTC_BUFFER LSB=clear
+    
+    BSF RTC_SCLK		;toggle RTC serial clock
+    nop
+    BCF RTC_SCLK
+    
+    RRF RTC_BUFFER,F		;RTC_BUFFER,1 -> RTC_BUFFER,0
+    DECFSZ TEMP_REG,F		;repeat 8 times
+    GOTO RTC.write.TX.loop
+    RRF RTC_BUFFER,F		;set values as before
+    RETURN
+;###END#OF#CALL###    
+    
+    
+    
+    
+    
+    
+    
     
     END
