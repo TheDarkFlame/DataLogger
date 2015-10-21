@@ -500,9 +500,9 @@ RTC.write
     BANKSEL PORTC
     
     BSF RTC_CE			;enable TX
-    ;---------------------------------------------------------------------------
     ;first we must clear the write protect bit
-    MOVLW b'10010000'		;1,calendar/clock,burst mode,write
+    ;---------------------------------------------------------------------------
+    MOVLW b'10010000'		;1,calendar/clock,adr=8,write
     MOVWF RTC_BUFFER
     CALL RTC.write.TX
     ;---------------------------------------------------------------------------
@@ -570,12 +570,18 @@ RTC.write
     CALL RTC.write.TX
     ;---------------------------------------------------------------------------
     BCF RTC_CE			;end TX
+    
+    BANKSEL TRISA
+    BSF TRISC,0	;set RTC SCLK input
+    BSF TRISC,1	;set RTC IO input
+    BANKSEL 0x00
+    
     RETURN
     
 ;###END#OF#CALL###    
 
 ;*******************************************************************************
-;	serial transfer for RTC write
+;	serial transmit for RTC read&write
 ;*******************************************************************************
 RTC.write.TX    
 ;this function is a serial transmit
@@ -602,9 +608,91 @@ RTC.write.TX.loop
     RETURN
 ;###END#OF#CALL###    
     
+;*******************************************************************************
+;	read current values on the RTC
+;*******************************************************************************
+RTC.read    
+    
+    BANKSEL TRISA
+    BCF TRISA,2	;set RTC CE output
+    BCF TRISC,0	;set RTC SCLK output
+    BCF TRISC,1	;set RTC IO output
+    BANKSEL PORTC
+    
+    ;---------------------------------------------------------------------------
+    BSF RTC_CE			;enable TX/RX
+    MOVLW b'10000101'		;1,calendar/clock,adr=2,read
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX		;send address and specify read mode
+    
+    BANKSEL TRISA
+    BSF TRISC,0	;set RTC SCLK input
+    BSF TRISC,1	;set RTC IO input
+    BANKSEL PORTC
+    
+    CALL RTC.read.RX		;receive data in RTC minutes reg into RTC_BUFFER
+    MOVFW RTC_BUFFER
+    MOVWF READ_TIME_L
+    BCF RTC_CE			;end TX/RX
+    ;---------------------------------------------------------------------------
+    BSF RTC_CE			;enable TX/RX
+
+    BANKSEL TRISA
+    BCF TRISC,0	;set RTC SCLK output
+    BCF TRISC,1	;set RTC IO output
+    BANKSEL PORTC
+
+    MOVLW b'10000111'		;1,calendar/clock,adr=3,read
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX		;send address and specify read mode
+    
+    BANKSEL TRISA
+    BSF TRISC,0	;set RTC SCLK input
+    BSF TRISC,1	;set RTC IO input
+    BANKSEL PORTC
+    
+    CALL RTC.read.RX		;receive data in RTC minutes reg into RTC_BUFFER
+    MOVFW RTC_BUFFER
+    MOVWF READ_TIME_H
+    BCF RTC_CE			;end TX/RX
+    ;---------------------------------------------------------------------------
     
     
     
+    
+    RETURN
+;###END#OF#CALL###    
+;*******************************************************************************
+;	serial receive for RTC read
+;*******************************************************************************
+RTC.read.RX    
+;this function is a serial receive
+;it gets in a byte 1 by 1 on the the RTC IO pin
+;also controls SCLK behaviour required for the serial RX
+    ;RTC_IO = PORTC,1
+    ;RTC_SCLK = PORTC,0
+    
+    CLRF TEMP_REG
+    BSF TEMP_REG,3		;TEMP_REG=8
+    
+RTC.write.RX.loop    
+    BSF RTC_SCLK		;toggle RTC serial clock high
+    
+    BTFSS RTC_IO		;test RTC_BUFFER LSB
+    GOTO $+3
+    BSF RTC_BUFFER,0			;set RTC_IO if RTC_BUFFER LSB=set
+    GOTO $+2
+    BCF RTC_BUFFER,0			;clear RTC_IO if RTC_BUFFER LSB=clear
+    
+    BCF RTC_SCLK		;toggle RTC serial clock low
+    
+    
+    RLF RTC_BUFFER,F		;RTC_BUFFER,0 -> RTC_BUFFER,1
+    DECFSZ TEMP_REG,F		;repeat 8 times
+    GOTO RTC.write.RX.loop
+    RLF RTC_BUFFER,F
+    RETURN
+;###END#OF#CALL###      
     
     
     
