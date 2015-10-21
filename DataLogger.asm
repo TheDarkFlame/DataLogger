@@ -20,7 +20,7 @@
 ;   note that RC0 and RC1 are dual bound, but the bindings will never conflict *    
 ;*******************************************************************************
 #include "p16F690.inc"
-
+    errorlevel -302
 ; CONFIG
 ; __config 0xFFF7
  __CONFIG _FOSC_EXTRCCLK & _WDTE_OFF & _PWRTE_OFF & _MCLRE_ON & _CP_OFF & _CPD_OFF & _BOREN_ON & _IESO_ON & _FCMEN_ON
@@ -62,8 +62,9 @@ LCD_BUFFER res 1	    ;stores whatever we want to put on the LCD right now
 ;-----x--		    ;button_up state 0=released 1=pressed
 D1  res 1		    ;delay register 1
 D2  res 1		    ;delay resgiter 2
-TD1 res 1		    ;timer delay register 1
-TD2 res 1		    ;timer delay register 2
+TD1 res 1		    ;timer delay register 1(for 1 sec)
+TD2 res 1		    ;timer delay register 2(for 1 min)
+TD3 res 1		    ;timer delay register 3(for 5 min)
 BCD_H res 1		    ;register used for bin->BCD (high byte)
 BCD_L res 1		    ;register used for bin->BCD (low byte)
 TEMP_REG res 1		    ;temporary register
@@ -76,25 +77,7 @@ RES_VECT  CODE    0x0000            ; processor reset vector
 ;*******************************************************************************
 ; MACROS
 ;*******************************************************************************
-
-;-------------------------------------------------------------------------------    
-delay_10_ms macro
-    ;goto=2 cyles, decfsz=1 cycle, if zero=2 cycles
-    MOVLW .40
-    MOVWF D2
-
-;if innerloopnumber=82, total cycles=10082, which is close enough to 10ms
-    MOVLW .83	;approx 1/4 ms
-    MOVWF D1	
-    
-    DECFSZ D1,F	;count until D1=0
-    GOTO $-1	;keep counting down until
-    DECFSZ D2,F	;D1=0, so count down D2, and reset D1 until D2=0
-    GOTO $-4	;reset D1
-    ENDM
-;-------------------------------------------------------------------------------
-
-    
+  
 ;-------------------------------------------------------------------------------
 eeprom.store macro edata, eadr
  ;does the eeprom store command, simple saves "edata" into "eadr" in eeprom
@@ -135,10 +118,49 @@ ISR       CODE    0x0004    ;interrupts start at 0x0004
 ;end ISR
     
     
-TMR0_ISR
+TMR0_ISR	;happens once every 10ms
+    ;GOTO TMR0_ISR.end
+    ;------10MS ISR content start
     
+    ;------10MS ISR content end
+    DECFSZ TD1,F	    ;count down from 100 every 10ms
+    GOTO $+2
+    GOTO TMR0_ISR.1sec	    ;check for 1second
+    GOTO TMR0_ISR.end
     
+TMR0_ISR.1sec		    ;happens once every 1sec
+    MOVLW .100		    ;reset count for 1 sec
+    MOVWF TD1
+    ;------1SEC ISR content start
     
+    ;------1SEC ISR content end    
+    DECFSZ TD2,F	    ;count down from 60 every 1 sec
+    GOTO $+2
+    GOTO TMR0_ISR.1min	    ;if zero, goto ISR.1min
+    GOTO TMR0_ISR.end	    ;else goto ISR.end
+    
+TMR0_ISR.1min		    ;happens every 1 min
+    MOVLW .60		    ;reset count for 1 min
+    MOVWF TD2
+    ;------1MIN ISR content start
+    
+    ;------1MIN ISR content end
+    DECFSZ TD3,F	    ;count down from 5 every 1 min
+    GOTO $+2
+    GOTO TMR0_ISR.5min	    ;if zero, goto ISR.5min
+    GOTO TMR0_ISR.end	    ;else goto ISR.end
+    
+TMR0_ISR.5min		    ;happens every 5 min
+    MOVLW .5		    ;reset count for 5 min
+    MOVWF TD3
+    ;------1MIN ISR content start
+    CALL SampleData	    ;get data
+    CALL lcd.print.lastsample	    ;display data
+;    CALL eeprom.write	    ;store data
+    ;------1MIN ISR content end
+    GOTO  TMR0_ISR.end	    ;goto ISR.end
+    
+TMR0_ISR.end    
     BCF INTCON,T0IF	    ;clear interrupt flag
     RETURN
 ;###END#OF#ISRs###
@@ -167,11 +189,11 @@ SETUP
     BANKSEL TRISC
     MOVWF TRISC			    ;set PORTC as input so we don't mess with initialization
     
-    delay_10_ms
-    delay_10_ms
-    delay_10_ms
-    delay_10_ms
-    delay_10_ms
+   CALL delay_10_ms
+   CALL delay_10_ms
+   CALL delay_10_ms
+   CALL delay_10_ms
+   CALL delay_10_ms
     
  
     BANKSEL TRISC
@@ -190,6 +212,12 @@ SETUP
     nop
     BCF PORTC,LCD_E
 
+    CALL delay_10_ms
+    MOVLW b'00101111'		    ;4bit, 2 lines,5x11dots
+    MOVWF LCD_BUFFER		    ;move command into buffer
+    CALL lcd.command		    ;send command
+    
+    CALL delay_10_ms
     MOVLW b'00001111'		    ;00001DCB Display=on Blinking=on Cursor=on
     MOVWF LCD_BUFFER		    ;move command into buffer
     CALL lcd.command		    ;send command
@@ -229,16 +257,44 @@ SETUP
     MOVWF TMR0
     
     
-    BSF INTCON, GIE			;enable global interrupts
     
+    ;set all ISR values to 1 so we enter the highest ISR on first interrupt
+    MOVLW .1
+    MOVWF TD1	;set delay1=100x10ms	(so 1 second intervals)
+    MOVLW .1
+    MOVWF TD2	;set delay2=60x1s	(so 1 minute intervals)
+    MOVLW .1
+    MOVWF TD3	;set delay3=5x1min	(so 5 minute intervals)
+    
+    
+    BSF INTCON, GIE			;enable global interrupts
 START
 
-   
-;    CALL SampleData
+
+   ;    CALL SampleData
 ;    BTFSS STATE,0		    ; are we in playback mode
     ;delay by 10ms
     GOTO START
 
+;*******************************************************************************
+; Delay 10 ms -> 10ms delay 
+;*******************************************************************************
+delay_10_ms
+    ;goto=2 cyles, decfsz=1 cycle, if zero=2 cycles
+    MOVLW .40
+    MOVWF D2
+
+;if innerloopnumber=82, total cycles=10082, which is close enough to 10ms
+    MOVLW .83	;approx 1/4 ms
+    MOVWF D1	
+    
+    DECFSZ D1,F	;count until D1=0
+    GOTO $-1	;keep counting down until
+    DECFSZ D2,F	;D1=0, so count down D2, and reset D1 until D2=0
+    GOTO $-4	;reset D1
+    RETURN
+    
+;###END#OF#CALL###
 
 ;*******************************************************************************
 ; EEPROM.write 
@@ -293,7 +349,7 @@ eeprom.write
 ;*******************************************************************************
 ; sample data - covers data sampling, and display updating if required 
 ;*******************************************************************************
-sampledata
+SampleData
     
 ;--------------------------------
 ;sample temperature
@@ -360,31 +416,6 @@ sampledata
     RETURN
 ;###END#OF#CALL###
     
-;*******************************************************************************
-; LCD write data - writes data in LCD_BUFFER to the LCD 
-; LCD write command - writes commands to in LCD_BUFFER to the LCD
-;
-; note only difference is: data mode sets RC4, command mode clears RC4
-;*******************************************************************************
-
-;this controls whether it is data or command
-lcd.data
-    CALL test_busy_flag		    ;outputs in bank0, write mode
-    BSF PORTC,LCD_RS			    ;set to data mode
-    GOTO $+3
-lcd.command
-    CALL test_busy_flag		    ;outputs in bank0, write mode
-    BCF PORTC,LCD_RS			    ;set to command mode
-;part below this is the write part of lcd.data and lcd.command
-    
-    SWAPF LCD_BUFFER,W		    ;move LCD_BUFFER<4:7> to W<0:3>
-    CALL lcd.write			    ;write W<0:3> to LCD<4:7>
-    
-    MOVFW LCD_BUFFER		    ;move LCD_BUFFER<0:3> to W<0:3>
-    CALL lcd.write			    ;write W<0:3> to LCD<4:7>
-    
-    RETURN
-;###END#OF#CALL###
 
     
 ;*******************************************************************************
@@ -413,7 +444,47 @@ Div10Finished
     RETURN
     
 ;###END#OF#CALL###
+    
+BINtoLCD
+;*******************************************************************************
+;	binary -> BCD -> LCD outputs W as BCD_L and BCD_H in ascii
+;*******************************************************************************
+    CALL BINtoBCD
+    BSF	BCD_L,5
+    BSF BCD_L,4
+    BSF BCD_H,5
+    BSF BCD_H,4
+    
+    RETURN
+;###END#OF#CALL###
+    
+;*******************************************************************************
+; LCD write data - writes data in LCD_BUFFER to the LCD 
+; LCD write command - writes commands to in LCD_BUFFER to the LCD
+;
+; note only difference is: data mode sets RC4, command mode clears RC4
+;*******************************************************************************
 
+;this controls whether it is data or command
+lcd.data
+    CALL test_busy_flag		    ;outputs in bank0, write mode
+    BSF PORTC,LCD_RS			    ;set to data mode
+    GOTO $+3
+lcd.command
+    CALL test_busy_flag		    ;outputs in bank0, write mode
+    BCF PORTC,LCD_RS			    ;set to command mode
+;part below this is the write part of lcd.data and lcd.command
+    
+    SWAPF LCD_BUFFER,W		    ;move LCD_BUFFER<4:7> to W<0:3>
+    CALL lcd.write			    ;write W<0:3> to LCD<4:7>
+    
+    MOVFW LCD_BUFFER		    ;move LCD_BUFFER<0:3> to W<0:3>
+    CALL lcd.write			    ;write W<0:3> to LCD<4:7>
+    
+    CALL delay_10_ms
+    
+    RETURN
+;###END#OF#CALL###
     
 ;*******************************************************************************
 ;	tests the busy flag and exits when LCD not busy
@@ -480,6 +551,51 @@ lcd.write
     
 ;###END#OF#CALL###
 
+;*******************************************************************************
+;	combines all LCD write functions into a formatted print
+;*******************************************************************************
+lcd.print.lastsample
+    MOVLW 0x01
+    MOVWF LCD_BUFFER
+    CALL lcd.command	;sends clear command
+    
+    MOVFW READ_TEMPERATURE
+    CALL BINtoLCD	;outputs=BCD_H and BCD_L
+	MOVFW BCD_H
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;sends temp_10s to display
+    
+	MOVFW BCD_L
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;sends temp_1s to display
+	MOVLW b'11011111'	;degrees symbol
+	MOVWF LCD_BUFFER
+	
+	CALL lcd.data	;text to display
+	MOVLW 'C'
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;text to display
+    
+    MOVLW b'11000000'	;1,addr=100 0000 (40h)
+    MOVWF LCD_BUFFER
+    CALL lcd.command	;sends newline command (set address=40h)
+	
+    MOVFW READ_HUMIDITY
+    CALL BINtoLCD	;outputs=BCD_H and BCD_L
+	MOVFW BCD_H
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;sends humidity_10s to display
+    
+	MOVFW BCD_L
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;sends humidity_1s to display
+	
+	MOVLW '%'	;degrees symbol
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;text to display
+    
+
+;###END#OF#CALL###
     
 ;*******************************************************************************
 ;	writes values to the RTC
@@ -694,6 +810,10 @@ RTC.write.RX.loop
     RETURN
 ;###END#OF#CALL###      
     
+    
+    
+    org 0x100
+LOOKUP1	DA "213562404",0x00
     
     
     
