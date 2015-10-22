@@ -59,7 +59,8 @@ RTC_BUFFER res 1	    ;working register to aid getting serial IO
 LCD_BUFFER res 1	    ;stores whatever we want to put on the LCD right now
 ;-------x		    ;mode bit 1=playback 0=display
 ;------x-		    ;button_up state 0=released 1=pressed
-;-----x--		    ;button_up state 0=released 1=pressed
+;-----x--		    ;button_down state 0=released 1=pressed
+;----x---		    ;button_down state 0=released 1=pressed
 D1  res 1		    ;delay register 1
 D2  res 1		    ;delay resgiter 2
 TD1 res 1		    ;timer delay register 1(for 1 sec)
@@ -68,7 +69,11 @@ TD3 res 1		    ;timer delay register 3(for 5 min)
 BCD_H res 1		    ;register used for bin->BCD (high byte)
 BCD_L res 1		    ;register used for bin->BCD (low byte)
 TEMP_REG res 1		    ;temporary register
- 
+CHAR_L res 1		    ;stores lowbyte ascii characters for write functions
+CHAR_H res 1		    ;stores highbyte ascii characters for write functions
+Button_Up_Count res 1	    ;used for tracking up button state
+Button_Down_Count res 1	    ;used for tracking down button state
+Button_Mode_Count res 1	    ;used for tracking mode button state
  
  
 RES_VECT  CODE    0x0000            ; processor reset vector
@@ -119,7 +124,7 @@ ISR       CODE    0x0004    ;interrupts start at 0x0004
     
     
 TMR0_ISR	;happens once every 10ms
-    ;GOTO TMR0_ISR.end
+;    GOTO TMR0_ISR.end
     ;------10MS ISR content start
     
     ;------10MS ISR content end
@@ -162,6 +167,8 @@ TMR0_ISR.5min		    ;happens every 5 min
     
 TMR0_ISR.end    
     BCF INTCON,T0IF	    ;clear interrupt flag
+    MOVLW .217				; configured for 10ms delay (256=65ms according to stopwatch)
+    MOVWF TMR0
     RETURN
 ;###END#OF#ISRs###
     
@@ -266,7 +273,7 @@ SETUP
     MOVLW .1
     MOVWF TD3	;set delay3=5x1min	(so 5 minute intervals)
     
-    
+    CALL lcd.print.lastsample
     BSF INTCON, GIE			;enable global interrupts
 START
 
@@ -355,37 +362,6 @@ SampleData
 ;sample temperature
 ;--------------------------------
     BANKSEL ADCON0
-    MOVLW b'10101101'			;right justify
-    MOVWF ADCON0			;Vdd,AN11, on
-
-    ;6uS delay
-    nop
-    nop
-    nop
-    nop
-    nop
-    nop
-    
-    BSF ADCON0,GO	;start conversion
-    BTFSC ADCON0,GO	;are we done the conversion?
-    GOTO $-1		;try again if not
-
-    BCF STATUS,C
-    BANKSEL ADRESL
-    INCF ADRESL,F	;divide by 2, rounding up
-    RRF ADRESL,W	;conversion based on Vcc being about 5V
-    BANKSEL PORTC
-    MOVWF READ_TEMPERATURE   ;stored for saving to eeprom later (and for displaying)
-
-;--------------------------------
-;sample humidity
-;--------------------------------
-    ;humidity is a vaguely linear value, ranging from 1V(30%) to 3V(90%)
-    ;for every 10% there is 0.33V	 so 1% is 33mV.
-    ;the ADC has a minimum step size of 40mv, as such we will use a OP-amp to amplify
-    ;40/33=1.21. thus we use a positive amplifier with resistor values of the ratio 5*Rf=R1 
-    ;1bit=1%
-    BANKSEL ADCON0
     MOVLW b'10101001'			;right justify
     MOVWF ADCON0			;Vdd,AN10, on
 
@@ -401,11 +377,63 @@ SampleData
     BTFSC ADCON0,GO	;are we done the conversion?
     GOTO $-1		;try again if not
 
-    BCF STATUS,C
+    ;get value in from ADC
     BANKSEL ADRESL
-    MOVFW ADRESL	;get value from humidity sensor
+    MOVFW ADRESL	
     BANKSEL PORTC
-    MOVWF READ_HUMIDITY   ;stored for saving to eeprom later (and for displaying)
+    ;parse value read
+    MOVWF TEMP_REG
+    BCF STATUS,C
+    RRF TEMP_REG,W
+    MOVWF READ_TEMPERATURE   ;stored for saving to eeprom later (and for displaying)
+
+;--------------------------------
+;sample humidity
+;--------------------------------
+    ;humidity is a vaguely linear value, ranging from 1V(30%) to 3V(90%)
+    ;thus 0V=0% 3.3V=100%
+    ;note that our step number is 1024 (10bit) we will ignore the lowest 4 bits
+    ;to improve accuracy, thus effectively we are dealing with a 256 step (8bit)
+    ;for such an ADC 1 step=19.53mV, 100 steps=1.953V, this is very small
+    ;so instead of scaling 3.3V to 1.953V, we scale 3.3V to 2*1.953V=3.90625V
+    ;when parsing our values, we divide the entire number by 2 and get our result.
+    ;thus we scale 3.3V to 3.91 with a gain of 3.91/3.3 = 1.184
+    ;thus Rf=0.184*R1 for a positive gain op-amp
+    BANKSEL ADCON0
+    MOVLW b'10101101'			;right justify
+    MOVWF ADCON0			;Vdd,AN11, on
+
+    ;6uS delay
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+    
+    BSF ADCON0,GO	;start conversion
+    BTFSC ADCON0,GO	;are we done the conversion?
+    GOTO $-1		;try again if not
+    
+    ;get values
+    BANKSEL ADRESL
+    MOVFW ADRESL	;get lowbyte from humidity sensor
+    BANKSEL PORTC
+    MOVWF READ_HUMIDITY   
+    BANKSEL ADRESH
+    MOVFW ADRESH	;get highbyte from humidity sensor
+    BANKSEL PORTC
+    MOVWF TEMP_REG
+    ;note, we must divide by 2, and then by 4 as we were treating it as a 8 bit reg
+    ;bit it is really a 10bit reg
+    ;shift highbytes into lowbytes (dividing by 4, thus getting 8bit mode)
+    RRF TEMP_REG,F	;LSB TEMP_REG -> Carry
+    RRF READ_HUMIDITY,F	;Carry -> MSB READ_HUMIDITY
+    RRF TEMP_REG,F	;LSB TEMP_REG -> Carry
+    RRF READ_HUMIDITY,F	;Carry -> MSB READ_HUMIDITY
+    ;now divide by 2, as our scale was based on 0->200 not 0->100
+    BCF STATUS,C	;Clear carry
+    ;RRF READ_HUMIDITY,F	;Divide by 2
     
 ;--------------------------------
 ;obtain time
@@ -450,10 +478,9 @@ BINtoLCD
 ;	binary -> BCD -> LCD outputs W as BCD_L and BCD_H in ascii
 ;*******************************************************************************
     CALL BINtoBCD
-    BSF	BCD_L,5
-    BSF BCD_L,4
-    BSF BCD_H,5
-    BSF BCD_H,4
+    MOVLW b'00110000'
+    ADDWF BCD_L,F
+    ADDWF BCD_H,F
     
     RETURN
 ;###END#OF#CALL###
@@ -812,9 +839,124 @@ RTC.write.RX.loop
     
     
     
-    org 0x100
-LOOKUP1	DA "213562404",0x00
+
     
+;*******************************************************************************
+;	combines all LCD write functions into a formatted print
+;*******************************************************************************
+lcd.print.greet
+    MOVLW 0x01
+    MOVWF LCD_BUFFER
+    CALL lcd.command	;sends clear command
     
+    MOVLW '0'
+    MOVWF LCD_BUFFER
+    CALL lcd.data	;text to display
+    
+    MOVLW .1
+    CALL BINtoLCD
+    MOVFW BCD_L
+    MOVWF LCD_BUFFER
+    CALL lcd.data	;text to display
+    
+    MOVLW b'11000000'	;1,addr=100 0000 (40h)
+    MOVWF LCD_BUFFER
+    CALL lcd.command	;sends newline command (set address=40h)
+	
+    MOVLW '2'
+    MOVWF LCD_BUFFER
+    CALL lcd.data	;text to display
+    
+    MOVLW '3'
+    MOVWF LCD_BUFFER
+    CALL lcd.data	;text to display
+    MOVLW '4'
+    MOVWF LCD_BUFFER
+    CALL lcd.data	;text to display
+    
+    MOVLW '5'
+    MOVWF LCD_BUFFER
+    CALL lcd.data	;text to display
+    
+    MOVLW '6'
+    MOVWF LCD_BUFFER
+    CALL lcd.data	;text to display
+    
+    MOVLW '7'
+    MOVWF LCD_BUFFER
+    CALL lcd.data	;text to display
+    RETURN
+        
+
+;###END#OF#CALL###
+lcd.print LOOKUP1
+;*******************************************************************************
+;	a generic LCD print function that will print any ascii array
+;*******************************************************************************
+;inspired by this code http://www.microchip.com/forums/m90152.aspx
+lcd.print macro MemoryAddress    
+    local print.end, print.loop   
+    
+    print.loop
+    BANKSEL EEADR
+    MOVLW LOW MemoryAddress
+    MOVFW EEADR
+    MOVLW HIGH MemoryAddress
+    MOVFW EEADRH
+    
+    CALL eeprom.ReadProgMem
+    MOVFW CHAR_L	;test for NullChar
+    BTFSC STATUS,Z	;if zero, end routine, else print
+	GOTO print.end		;end
+    MOVWF LCD_BUFFER	;print
+    CALL lcd.data
+    
+    MOVFW CHAR_H	;test for NullChar
+    BTFSC STATUS,Z	;if zero, end routine, else print
+	GOTO print.end		;end
+    MOVWF LCD_BUFFER	;print
+    CALL lcd.data
+	
+	INCF EEADR,F	;move to next memory address
+    BTFSC STATUS,C	;if carry set, we have a rollover, so inc EEADRH
+	INCF EEADRH,F
+    GOTO print.loop 
+    
+    print.end
+    
+    ENDM
+    
+;*******************************************************************************
+;	uses eeprom to read ascii data stored in program memory
+;*******************************************************************************
+eeprom.ReadProgMem
+    ;mostly used example 10-3 from the datasheet as a reference
+    BANKSEL EECON1
+    BSF EECON1, EEPGD	;program memory
+    BSF EECON1, RD	;EE read
+    nop
+    nop
+    BANKSEL EEDAT
+    MOVFW EEDAT
+    BANKSEL 0x00
+    MOVWF CHAR_L
+    BANKSEL EEDAT
+    MOVFW EEDATH
+    BANKSEL 0x00
+    MOVWF CHAR_H
+    ;input was as follows (7H 7L)   : HHHHHHHLLLLLLL
+    ;output is as follows	    : 00HHHHHH  HLLLLLLL
+    ;as such we must shift the MSB of CHAR_L into CHAR_H
+    RLF CHAR_L,W		    ;MSB CHAR_L -> Carry, does not affect CHAR_L
+    RLF CHAR_H,F		    ;Carry -> LSB CHAR_H
+    BCF CHAR_H,7		    ;clear the MSB of CHAR_H
+    BCF CHAR_L,7		    ;clear the MSB of CHAR_L
+    
+    RETURN
+;###END#OF#CALL###
+    
+    org 0x1000
+printTable
+LOOKUP1	DA "213562404",0x00 
     
     END
