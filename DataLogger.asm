@@ -74,6 +74,9 @@ CHAR_H res 1		    ;stores highbyte ascii characters for write functions
 Button_Up_Count res 1	    ;used for tracking up button state
 Button_Down_Count res 1	    ;used for tracking down button state
 Button_Mode_Count res 1	    ;used for tracking mode button state
+Input1 res 1		    ;used as a generic input for multiple input functions
+Input2 res 1		    ;used as a generic input for multiple input functions
+ 
  
  
 RES_VECT  CODE    0x0000            ; processor reset vector
@@ -889,20 +892,27 @@ lcd.print.greet
         
 
 ;###END#OF#CALL###
-lcd.print LOOKUP1
+
+    MOVLW LOW LOOKUP1
+    MOVWF Input1
+    MOVLW HIGH LOOKUP1
+    MOVWF Input2
+    CALL lcd.print
 ;*******************************************************************************
 ;	a generic LCD print function that will print any ascii array
 ;*******************************************************************************
 ;inspired by this code http://www.microchip.com/forums/m90152.aspx
-lcd.print macro MemoryAddress    
-    local print.end, print.loop   
+lcd.print     
     
-    print.loop
+print.loop
+    BANKSEL Input1
+    MOVFW Input1
     BANKSEL EEADR
-    MOVLW LOW MemoryAddress
-    MOVFW EEADR
-    MOVLW HIGH MemoryAddress
-    MOVFW EEADRH
+    MOVWF EEADR
+    BANKSEL Input2
+    MOVFW Input2
+    BANKSEL EEADR
+    MOVWF EEADRH
     
     CALL eeprom.ReadProgMem
     MOVFW CHAR_L	;test for NullChar
@@ -922,9 +932,9 @@ lcd.print macro MemoryAddress
 	INCF EEADRH,F
     GOTO print.loop 
     
-    print.end
+print.end
     
-    ENDM
+    RETURN
     
 ;*******************************************************************************
 ;	uses eeprom to read ascii data stored in program memory
@@ -955,7 +965,7 @@ eeprom.ReadProgMem
     RETURN
 ;###END#OF#CALL###
     
-    org 0x1000
+
 printTable
 LOOKUP1	DA "213562404",0x00 
     
