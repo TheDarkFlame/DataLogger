@@ -944,12 +944,7 @@ Poll_Button_Up.ReleasedState.Pressed
     ;---------------
     ;conditional stuff for when our button is pressed
     
-    MOVLW LOW LOOKUP1
-    MOVWF Input1
-    MOVLW HIGH LOOKUP1
-    MOVWF Input2
-    CALL lcd.printline
-    
+
     ;---------------
     
     GOTO Poll_Button_Up.End
@@ -1152,6 +1147,6 @@ Poll_Button_Mode.End
 ;###END#OF#CALL###
     
 printTable
-LOOKUP1	DA "213562404",0x00 
+LOOKUP1	DA "213562404",0
     
     END
