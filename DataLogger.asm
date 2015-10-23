@@ -14,6 +14,7 @@
 ;                RB5        =Humidity sensor                                   *    
 ;                RA0        =ButtonDown	                                       *    
 ;                RA1        =ButtonUp	                                       *    
+;                RB7        =ButtonMode		                               *    
 ;                RA2        =RTC CE pin	                                       *    
 ;                RC1        =RTC IO pin	                                       *    
 ;                RC0        =RTC SCLK pin	                               *    
@@ -35,6 +36,10 @@
 #define LCD_BF	3		; LCD_D7 = BF in read mode
 #define Button_Down PORTA,0
 #define Button_Up PORTA,1
+#define Button_Mode PORTB,7
+#define Button_Down.State STATE,0
+#define Button_Up.State STATE,1
+#define Button_Mode.State STATE, 2
 #define RTC_CE PORTA,2
 #define RTC_IO PORTC,1
 #define RTC_SCLK PORTC,0
@@ -128,7 +133,9 @@ ISR       CODE    0x0004    ;interrupts start at 0x0004
 TMR0_ISR	;happens once every 10ms
 ;    GOTO TMR0_ISR.end
     ;------10MS ISR content start
-    
+    CALL Poll_Button_Up
+    CALL Poll_Button_Down
+    CALL Poll_Button_Mode
     ;------10MS ISR content end
     DECFSZ TD1,F	    ;count down from 100 every 10ms
     GOTO $+2
@@ -840,70 +847,12 @@ RTC.write.RX.loop
 ;###END#OF#CALL###      
     
     
-    
-
-    
-;*******************************************************************************
-;	combines all LCD write functions into a formatted print
-;*******************************************************************************
-lcd.print.greet
-    MOVLW 0x01
-    MOVWF LCD_BUFFER
-    CALL lcd.command	;sends clear command
-    
-    MOVLW '0'
-    MOVWF LCD_BUFFER
-    CALL lcd.data	;text to display
-    
-    MOVLW .1
-    CALL BINtoLCD
-    MOVFW BCD_L
-    MOVWF LCD_BUFFER
-    CALL lcd.data	;text to display
-    
-    MOVLW b'11000000'	;1,addr=100 0000 (40h)
-    MOVWF LCD_BUFFER
-    CALL lcd.command	;sends newline command (set address=40h)
-	
-    MOVLW '2'
-    MOVWF LCD_BUFFER
-    CALL lcd.data	;text to display
-    
-    MOVLW '3'
-    MOVWF LCD_BUFFER
-    CALL lcd.data	;text to display
-    MOVLW '4'
-    MOVWF LCD_BUFFER
-    CALL lcd.data	;text to display
-    
-    MOVLW '5'
-    MOVWF LCD_BUFFER
-    CALL lcd.data	;text to display
-    
-    MOVLW '6'
-    MOVWF LCD_BUFFER
-    CALL lcd.data	;text to display
-    
-    MOVLW '7'
-    MOVWF LCD_BUFFER
-    CALL lcd.data	;text to display
-    RETURN
-        
-
-;###END#OF#CALL###
-
-    MOVLW LOW LOOKUP1
-    MOVWF Input1
-    MOVLW HIGH LOOKUP1
-    MOVWF Input2
-    CALL lcd.print
 ;*******************************************************************************
 ;	a generic LCD print function that will print any ascii array
 ;*******************************************************************************
 ;inspired by this code http://www.microchip.com/forums/m90152.aspx
-lcd.print     
+lcd.printline	;prints a line of text     
     
-print.loop
     BANKSEL Input1
     MOVFW Input1
     BANKSEL EEADR
@@ -913,25 +862,27 @@ print.loop
     BANKSEL EEADR
     MOVWF EEADRH
     
+lcd.printline.loop
     CALL eeprom.ReadProgMem
-    MOVFW CHAR_L	;test for NullChar
+    MOVFW CHAR_H	;test for NullChar
     BTFSC STATUS,Z	;if zero, end routine, else print
-	GOTO print.end		;end
+	GOTO lcd.printline.end		;end
     MOVWF LCD_BUFFER	;print
     CALL lcd.data
     
-    MOVFW CHAR_H	;test for NullChar
+    MOVFW CHAR_L	;test for NullChar
     BTFSC STATUS,Z	;if zero, end routine, else print
-	GOTO print.end		;end
+	GOTO lcd.printline.end		;end
     MOVWF LCD_BUFFER	;print
     CALL lcd.data
 	
+    BANKSEL EEADR
 	INCF EEADR,F	;move to next memory address
     BTFSC STATUS,C	;if carry set, we have a rollover, so inc EEADRH
 	INCF EEADRH,F
-    GOTO print.loop 
+    GOTO lcd.printline.loop 
     
-print.end
+lcd.printline.end
     
     RETURN
     
@@ -965,9 +916,9 @@ eeprom.ReadProgMem
 ;###END#OF#CALL###
 
     
-    Poll_Button_Up    
+Poll_Button_Up    
     
-    BTFSS   STATE,0		;LSB=0 button released| LSB=1, button pressed
+    BTFSS   Button_Up.State		;LSB=0 button released| LSB=1, button pressed
     GOTO    Poll_Button_Up.ReleasedState
     GOTO    Poll_Button_Up.PressedState
     
@@ -976,7 +927,7 @@ eeprom.ReadProgMem
 ;============
     ;check if button is pressed or released currently
 Poll_Button_Up.ReleasedState    
-    BTFSS PORTA,0	    		;check RA0, if RA0=0 button=pressed, count
+    BTFSS Button_Up	    		;check RA0, if RA0=0 button=pressed, count
 								;if RA0=1 button=released, clear count
     GOTO Poll_Button_Up.ReleasedState.Pressed
     GOTO Poll_Button_Up.ReleasedState.Released
@@ -988,12 +939,16 @@ Poll_Button_Up.ReleasedState.Pressed
     GOTO Poll_Button_Up.End 	;if !=4, exit the poll
     
     CLRF Button_Up_Counter	    ;clear the cur_num
-    BSF STATE,0	    	;change status to Pressed (1)
+    BSF Button_Up.State	    	;change status to Pressed (1)
     
     ;---------------
     ;conditional stuff for when our button is pressed
     
-    
+    MOVLW LOW LOOKUP1
+    MOVWF Input1
+    MOVLW HIGH LOOKUP1
+    MOVWF Input2
+    CALL lcd.printline
     
     ;---------------
     
@@ -1011,7 +966,7 @@ Poll_Button_Up.ReleasedState.Released
 ;============
     ;check if button is pressed or released currently    
 Poll_Button_Up.PressedState    
-    BTFSS PORTA,0	    		;check RA0, if RA0=0 button=pressed, count
+    BTFSS Button_Up	    		;check RA0, if RA0=0 button=pressed, count
 								;if RA0=1 button=released, clear count
     GOTO Poll_Button_Up.PressedState.Pressed
     GOTO Poll_Button_Up.PressedState.Released
@@ -1024,7 +979,7 @@ Poll_Button_Up.PressedState.Released
     GOTO Poll_Button_Up.End 	;if !=4, exit the poll
     
     CLRF Button_Up_Counter	    ;clear the cur_num
-    BCF STATE,0	    	;change status to Released (0)
+    BCF Button_Up.State	    	;change status to Released (0)
     GOTO Poll_Button_Up.End
     
     
@@ -1047,7 +1002,7 @@ Poll_Button_Up.End
 ;*******************************************************************************
 Poll_Button_Down    
     
-    BTFSS   STATE,1		; 0-> button released| 1 -> button pressed
+    BTFSS   Button_Down.State		; 0-> button released| 1 -> button pressed
     GOTO    Poll_Button_Down.ReleasedState
     GOTO    Poll_Button_Down.PressedState
     
@@ -1056,7 +1011,7 @@ Poll_Button_Down
 ;============
     ;check if button is pressed or released currently
 Poll_Button_Down.ReleasedState    
-    BTFSS PORTA,1	    		;check RA1, if RA1=0 button=pressed, count
+    BTFSS Button_Down	    		;check RA1, if RA1=0 button=pressed, count
 								;if RA1=1 button=released, clear count
     GOTO Poll_Button_Down.ReleasedState.Pressed
     GOTO Poll_Button_Down.ReleasedState.Released
@@ -1068,7 +1023,7 @@ Poll_Button_Down.ReleasedState.Pressed
     GOTO Poll_Button_Down.End 	;if !=4, exit the poll
     
     CLRF Button_Down_Counter	;clear the cur_num
-    BSF STATE,1	    	;change status to Pressed (1)
+    BSF Button_Down.State	    	;change status to Pressed (1)
 
     ;---------------
     ;conditional stuff for when our button is pressed
@@ -1090,7 +1045,7 @@ Poll_Button_Down.ReleasedState.Released
 ;============
     ;check if button is pressed or released currently    
 Poll_Button_Down.PressedState    
-    BTFSS PORTA,1	   			;check RA1, if RA1=0 button=pressed, count
+    BTFSS Button_Down	   			;check RA1, if RA1=0 button=pressed, count
 								;if RA1=1 button=released, clear count
     GOTO Poll_Button_Down.PressedState.Pressed
     GOTO Poll_Button_Down.PressedState.Released
@@ -1103,7 +1058,7 @@ Poll_Button_Down.PressedState.Released
     GOTO Poll_Button_Down.End 	;if !=4, exit the poll
     
     CLRF Button_Down_Counter	;clear the cur_num
-    BCF STATE,1	    	;change status to Released (0)
+    BCF Button_Down.State	    	;change status to Released (0)
     GOTO Poll_Button_Down.End
     
     
@@ -1118,7 +1073,84 @@ Poll_Button_Down.End
     
 ;###END#OF#CALL###								
 
+;*******************************************************************************
+;Poll_Button_Mode	    ;checks port RB7 for a logical low
+;		     primarily behaves like a set of nested if statements
+;*******************************************************************************
+Poll_Button_Mode    
+    
+    BTFSS   Button_Mode.State		;LSB=0 button released| LSB=1, button pressed
+    GOTO    Poll_Button_Mode.ReleasedState
+    GOTO    Poll_Button_Mode.PressedState
+    
+;============
+;State Released SUBCALL
+;============
+    ;check if button is pressed or released currently
+Poll_Button_Mode.ReleasedState    
+    BTFSS Button_Mode	    		;check RB7, if RB7=0 button=pressed, count
+								;if RB7=1 button=released, clear count
+    GOTO Poll_Button_Mode.ReleasedState.Pressed
+    GOTO Poll_Button_Mode.ReleasedState.Released
+    
+Poll_Button_Mode.ReleasedState.Pressed
+    INCF Button_Mode_Counter,F
+;<check for counter=4, if 4, then inc cur_num and reset counter as needed>
+    BTFSS Button_Mode_Counter,2	;.4 = b'00000100'
+    GOTO Poll_Button_Mode.End 	;if !=4, exit the poll
+    
+    CLRF Button_Mode_Counter	    ;clear the cur_num
+    BSF Button_Mode.State	    	;change status to Pressed (1)
+    
+    ;---------------
+    ;conditional stuff for when our button is pressed
+    
+    
+    
+    ;---------------
+    
+    GOTO Poll_Button_Mode.End
+    
+Poll_Button_Mode.ReleasedState.Released
+    CLRF Button_Mode_Counter
+    GOTO Poll_Button_Mode.End
+    
+;%%%%END%OF%SUBCALL%%%%
+    
 
+;============
+;State Pressed SUBCALL
+;============
+    ;check if button is pressed or released currently    
+Poll_Button_Mode.PressedState    
+    BTFSS PORTA,0	    		;check RA0, if RA0=0 button=pressed, count
+								;if RA0=1 button=released, clear count
+    GOTO Poll_Button_Mode.PressedState.Pressed
+    GOTO Poll_Button_Mode.PressedState.Released
+    
+    
+Poll_Button_Mode.PressedState.Released
+    INCF Button_Mode_Counter,F
+;<check for counter=4, if 4, then inc cur_num and reset counter as needed>
+    BTFSS Button_Mode_Counter,2  	;.4 = b'00000100'
+    GOTO Poll_Button_Mode.End 	;if !=4, exit the poll
+    
+    CLRF Button_Mode_Counter	    ;clear the cur_num
+    BCF Button_Mode.State	    	;change status to Released (0)
+    GOTO Poll_Button_Mode.End
+    
+    
+Poll_Button_Mode.PressedState.Pressed
+    CLRF Button_Mode_Counter
+    GOTO Poll_Button_Mode.End
+    
+;%%%%END%OF%SUBCALL%%%%
+    
+Poll_Button_Mode.End
+    RETURN
+    
+;###END#OF#CALL###
+    
 printTable
 LOOKUP1	DA "213562404",0x00 
     
