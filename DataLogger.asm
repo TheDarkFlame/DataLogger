@@ -16,9 +16,9 @@
 ;                RA1        =ButtonUp	                                       *    
 ;                RB7        =ButtonMode		                               *    
 ;                RA2        =RTC CE pin	                                       *    
-;                RC1        =RTC IO pin	                                       *    
+;                RC5        =RTC IO pin	                                       *    
 ;                RC0        =RTC SCLK pin	                               *    
-;   note that RC0 and RC1 are dual bound, but the bindings will never conflict *    
+;   note that RC0 and are dual bound, but the bindings will never conflict *    
 ;*******************************************************************************
 #include "p16F690.inc"
     errorlevel -302
@@ -41,7 +41,7 @@
 #define Button_Up.State STATE,1
 #define Button_Mode.State STATE, 2
 #define RTC_CE PORTA,2
-#define RTC_IO PORTC,1
+#define RTC_IO PORTC,5
 #define RTC_SCLK PORTC,0
  
 ;REGISTERS
@@ -51,7 +51,8 @@ READ_TEMPERATURE res 1	    ;stores last temperature we read from the sensor
 READ_HUMIDITY	res 1	    ;stores last humidity we read from the sensor
 READ_TIME_L  res 1	    ;stores minutes we last read from the RTC
 READ_TIME_H  res 1	    ;stores hours we last read from the RTC
-
+READ_POWERSUPPLY res 1	    ;last read power level of the device
+  
 CUR_EEADR  res 1	    ;working eeadr (eg for displaying)
 CUR_TEMPERATURE res 1	    ;working temperature
 CUR_HUMIDITY	res 1	    ;working humidity
@@ -80,7 +81,7 @@ Button_Down_Counter res 1	    ;used for tracking down button state
 Button_Mode_Counter res 1	    ;used for tracking mode button state
 Input1 res 1		    ;used as a generic input for multiple input functions
 Input2 res 1		    ;used as a generic input for multiple input functions
- 
+W_TEMP res 1		    ;context saving 
  
  
 RES_VECT  CODE    0x0000            ; processor reset vector
@@ -124,8 +125,12 @@ eeprom.store macro edata, eadr
 ; ISRs
 ;*******************************************************************************
 ISR       CODE    0x0004    ;interrupts start at 0x0004
+    MOVWF W_TEMP	    ;context saving
+    
     BTFSC INTCON,T0IF	 				 
     CALL TMR0_ISR	    ; check if ISR is for TMR0	 
+    
+    MOVFW W_TEMP	    ;context saving
     RETFIE
 ;end ISR
     
@@ -178,7 +183,7 @@ TMR0_ISR.end
     BCF INTCON,T0IF	    ;clear interrupt flag
     MOVLW .217				; configured for 10ms delay (256=65ms according to stopwatch)
     MOVWF TMR0
-    RETURN
+    RETFIE
 ;###END#OF#ISRs###
     
 ;*******************************************************************************
@@ -284,12 +289,12 @@ SETUP
     
     CALL lcd.print.lastsample
     BSF INTCON, GIE			;enable global interrupts
+
+    
+    
+    
+    
 START
-
-
-   ;    CALL SampleData
-;    BTFSS STATE,0		    ; are we in playback mode
-    ;delay by 10ms
     GOTO START
 
 ;*******************************************************************************
@@ -445,16 +450,122 @@ SampleData
     ;RRF READ_HUMIDITY,F	;Divide by 2
     
 ;--------------------------------
+;sample supply level
+;--------------------------------
+    ;we get in the 0.6V constant level from the ADC.
+    ;this will appear as a proportion of Vcc eg, if Vcc=1.2V 
+    ;the read will be 512 (of 1024)
+    ;as a result we can estimate what
+    ;percentage of Vcc 0.6V is
+    
+    MOVLW b'00110101'			;left justify
+    MOVWF ADCON0			;Vdd,0.6V constant, on
+
+    ;6uS delay
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+    
+    BSF ADCON0,GO	;start conversion
+    BTFSC ADCON0,GO	;are we done the conversion?
+    GOTO $-1		;try again if not
+    
+    ;x=read-in
+    ;y=5x/6=0.5V =10%
+    ;how many y's are in 255 (how many 10%'s of 5V are in our current Vcc)
+    ;ans: 255/y = 255*6/5x=306/x
+    ;this is hard to do as it involves 16bit calculations
+    ;z=x/2 -> rrf(x) = z
+    ;find 153/z so 153=z*c round down
+
+    ;get value in from ADC
+    BCF STATUS,C
+    BANKSEL ADRESH
+    RRF ADRESH,W	;divide by 2 (get z)	
+    BANKSEL PORTC
+    ;parse value read
+    MOVWF TEMP_REG
+    MOVLW .153
+    ;swap TEMP_REG and W
+    XORWF TEMP_REG,F
+    XORWF TEMP_REG,W
+    XORWF TEMP_REG,F
+    
+    CLRF READ_POWERSUPPLY
+
+    INCF READ_POWERSUPPLY,F ;inc counter
+    SUBWF TEMP_REG,F
+    ;if W<=f carry clear -> skip if carry set
+    BTFSS STATUS,C
+    GOTO $-3
+    DECF READ_POWERSUPPLY,F
+    ;this is the 10's digit, the 1's digit will always be 0
+    
+    BCF ADCON0,0    ;disable ADC until next sample
+;--------------------------------
 ;obtain time
 ;--------------------------------    
-    ;get time via i2c from the RTC (and go nuts with glee if it works)
+    ;get time from the RTC (and go nuts with glee if it works)
     
     
     RETURN
 ;###END#OF#CALL###
     
     
+
+;*******************************************************************************
+;   The following 3 functions are called as the state of the
+;   appropriate button changes
+;*******************************************************************************
+ButtonUp.OnPress
+    CALL lcd.clear
     
+;    MOVLW LOW StudentNumber
+;    MOVWF Input1
+;    MOVLW HIGH StudentNumber
+;    MOVWF Input2
+;    CALL lcd.printString
+;    CALL lcd.newline
+;    MOVLW LOW StudentName
+;    MOVWF Input1
+;    MOVLW HIGH StudentName
+;    MOVWF Input2
+;    CALL lcd.printString
+    MOVLW 30
+    MOVWF CUR_TIME_L
+    MOVLW 10
+    MOVWF CUR_TIME_H
+    CALL RTC.write
+    RETURN
+    
+ButtonDown.OnPress
+    CALL RTC.read
+    
+    MOVFW READ_TIME_H
+    MOVWF LCD_BUFFER
+    CALL lcd.data
+    
+    MOVFW READ_TIME_L
+    MOVWF LCD_BUFFER
+    CALL lcd.data
+    
+    RETURN
+    
+ButtonMode.OnPress
+    
+    RETURN
+;###END#OF#CALL###
+    
+    
+    
+    
+;*******************************************************************************
+;Poll_Button_Up	    ;checks for a logical low
+;		     primarily behaves like a set of nested if statements
+;*******************************************************************************
 Poll_Button_Up    
     
     BTFSS   Button_Up.State		;LSB=0 button released| LSB=1, button pressed
@@ -482,8 +593,7 @@ Poll_Button_Up.ReleasedState.Pressed
     
     ;---------------
     ;conditional stuff for when our button is pressed
-    
-
+    CALL ButtonUp.OnPress
     ;---------------
     
     GOTO Poll_Button_Up.End
@@ -530,9 +640,8 @@ Poll_Button_Up.End
 
     
 ;*******************************************************************************
-;Poll_Button_Down	    ;checks port RA1 for a logical low
+;Poll_Button_Down	    ;checks port for a logical low
 ;		     primarily behaves like a set of nested if statements
-; is basically a carbon copy of Poll_Button_Up, with different registers/bits
 ;*******************************************************************************
 Poll_Button_Down    
     
@@ -561,9 +670,7 @@ Poll_Button_Down.ReleasedState.Pressed
 
     ;---------------
     ;conditional stuff for when our button is pressed
-    
-    
-    
+    CALL ButtonDown.OnPress
     ;---------------
     GOTO Poll_Button_Down.End
     
@@ -608,7 +715,7 @@ Poll_Button_Down.End
 ;###END#OF#CALL###								
 
 ;*******************************************************************************
-;Poll_Button_Mode	    ;checks port RB7 for a logical low
+;Poll_Button_Mode	    ;checks port for a logical low
 ;		     primarily behaves like a set of nested if statements
 ;*******************************************************************************
 Poll_Button_Mode    
@@ -638,9 +745,7 @@ Poll_Button_Mode.ReleasedState.Pressed
     
     ;---------------
     ;conditional stuff for when our button is pressed
-    
-    
-    
+    CALL ButtonMode.OnPress 
     ;---------------
     
     GOTO Poll_Button_Mode.End
@@ -700,7 +805,7 @@ RTC.write
     BANKSEL TRISA
     BCF TRISA,2	;set RTC CE output
     BCF TRISC,0	;set RTC SCLK output
-    BCF TRISC,1	;set RTC IO output
+    BCF TRISC,5	;set RTC IO output
     BANKSEL PORTC
     
     BSF RTC_CE			;enable TX
@@ -777,7 +882,7 @@ RTC.write
     
     BANKSEL TRISA
     BSF TRISC,0	;set RTC SCLK input
-    BSF TRISC,1	;set RTC IO input
+    BSF TRISC,5	;set RTC IO input
     BANKSEL 0x00
     
     RETURN
@@ -820,7 +925,7 @@ RTC.read
     BANKSEL TRISA
     BCF TRISA,2	;set RTC CE output
     BCF TRISC,0	;set RTC SCLK output
-    BCF TRISC,1	;set RTC IO output
+    BCF TRISC,5	;set RTC IO output
     BANKSEL PORTC
     
     ;---------------------------------------------------------------------------
@@ -831,7 +936,7 @@ RTC.read
     
     BANKSEL TRISA
     BSF TRISC,0	;set RTC SCLK input
-    BSF TRISC,1	;set RTC IO input
+    BSF TRISC,5	;set RTC IO input
     BANKSEL PORTC
     
     CALL RTC.read.RX		;receive data in RTC minutes reg into RTC_BUFFER
@@ -843,7 +948,7 @@ RTC.read
 
     BANKSEL TRISA
     BCF TRISC,0	;set RTC SCLK output
-    BCF TRISC,1	;set RTC IO output
+    BCF TRISC,5	;set RTC IO output
     BANKSEL PORTC
 
     MOVLW b'10000111'		;1,calendar/clock,adr=3,read
@@ -852,7 +957,7 @@ RTC.read
     
     BANKSEL TRISA
     BSF TRISC,0	;set RTC SCLK input
-    BSF TRISC,1	;set RTC IO input
+    BSF TRISC,5	;set RTC IO input
     BANKSEL PORTC
     
     CALL RTC.read.RX		;receive data in RTC minutes reg into RTC_BUFFER
@@ -1095,7 +1200,7 @@ lcd.print.lastsample
 ;*******************************************************************************
 ;inspired by this code http://www.microchip.com/forums/m90152.aspx
 lcd.printString	;prints a line of text     
-    
+    BCF INTCON,GIE	;disable interrupts
     BANKSEL Input1
     MOVFW Input1
     BANKSEL EEADR
@@ -1122,11 +1227,11 @@ lcd.printString.loop
     BANKSEL EEADR
 	INCF EEADR,F	;move to next memory address
     BTFSC STATUS,C	;if carry set, we have a rollover, so inc EEADRH
-	INCF EEADRH,F
+	INCF EEADRH,F	
     GOTO lcd.printString.loop 
     
 lcd.printString.end
-    
+    BCF INTCON,GIE	;re-enable interrupts
     RETURN
     
 ;*******************************************************************************
@@ -1178,6 +1283,7 @@ lcd.newline
 
     
 ;LCD ascii arrays:    
-StudentNumber	DA "213562404",0
+StudentName	DA "  David Parker  ",0
+StudentNumber	DA "  213562404     ",0
     
     END
