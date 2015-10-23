@@ -453,468 +453,7 @@ SampleData
     RETURN
 ;###END#OF#CALL###
     
-
     
-;*******************************************************************************
-;	binary -> BCD outputs W as BCD_L and BCD_H
-;*******************************************************************************
-BINtoBCD
-							
-    ;DISP_BUFF_H = quotient
-    ;DISP_BUFF_L = remainder
-    CLRF   BCD_H		;clear our quotient
-    MOVWF   BCD_L		;store the number to be divided
-    
-    MOVLW   0x0A			;load 10 into W
-
-Div10Loop
-    SUBWF   BCD_L,1	;subtract 10 from number
-    BTFSC   BCD_L,7	;test for -ve
-    GOTO    Div10Finished	;if number is -ve, goto finshed
-    
-    INCF    BCD_H,F
-    GOTO    Div10Loop
-
-Div10Finished
-    ADDWF   BCD_L,1	;undo last subtraction to get remainder
-    
-    RETURN
-    
-;###END#OF#CALL###
-    
-BINtoLCD
-;*******************************************************************************
-;	binary -> BCD -> LCD outputs W as BCD_L and BCD_H in ascii
-;*******************************************************************************
-    CALL BINtoBCD
-    MOVLW b'00110000'
-    ADDWF BCD_L,F
-    ADDWF BCD_H,F
-    
-    RETURN
-;###END#OF#CALL###
-    
-;*******************************************************************************
-; LCD write data - writes data in LCD_BUFFER to the LCD 
-; LCD write command - writes commands to in LCD_BUFFER to the LCD
-;
-; note only difference is: data mode sets RC4, command mode clears RC4
-;*******************************************************************************
-
-;this controls whether it is data or command
-lcd.data
-    CALL test_busy_flag		    ;outputs in bank0, write mode
-    BSF PORTC,LCD_RS			    ;set to data mode
-    GOTO $+3
-lcd.command
-    CALL test_busy_flag		    ;outputs in bank0, write mode
-    BCF PORTC,LCD_RS			    ;set to command mode
-;part below this is the write part of lcd.data and lcd.command
-    
-    SWAPF LCD_BUFFER,W		    ;move LCD_BUFFER<4:7> to W<0:3>
-    CALL lcd.write			    ;write W<0:3> to LCD<4:7>
-    
-    MOVFW LCD_BUFFER		    ;move LCD_BUFFER<0:3> to W<0:3>
-    CALL lcd.write			    ;write W<0:3> to LCD<4:7>
-    
-    CALL delay_10_ms
-    
-    RETURN
-;###END#OF#CALL###
-    
-;*******************************************************************************
-;	tests the busy flag and exits when LCD not busy
-;*******************************************************************************
-test_busy_flag
-;    Pin config: RC<0:3>    =LCD D<4:7>	(datapins)                             *          
-;		 RC4	    =LCD RS	(reg select data=1 command=0)	       *	           
-;		 RC6	    =LCD R/W	(write=0/read=1)		       *		           
-;		 RC7	    =LCD E	(enable=1)			       *
-    ;waits until busy flag is cleared
-    ;outputs: MCU = bank0; LCD= write mode
-    BANKSEL TRISC
-    BSF TRISC,LCD_BF			    ;set RC3 as input to test busy flag
-    BANKSEL PORTC
-
-    
-    BSF PORTC,LCD_RW			    ;set to read mode
-    BCF PORTC,LCD_RS			    ;set to command mode
-    
-    nop
-    BSF PORTC,LCD_E			    ;pulse enable bit
-    nop
-    nop
-    BCF PORTC,LCD_E
-    
-    BTFSC PORTC,LCD_BF		    ;test busy flag until cleared
-    GOTO $-6
-    
-    BANKSEL TRISC
-    BCF TRISC,LCD_BF			    ;set RC3 as output
-    BANKSEL PORTC
-    
-    BCF PORTC,LCD_RW			    ;back into write mode
-    RETURN
-    
-;###END#OF#CALL###
-
-;*******************************************************************************
-;	performs the write actions for the LCD
-;*******************************************************************************
-
-lcd.write
-;writes to LCD, moves WREG<0:3> -> PORTC<0:3> == LCD DB<4:7>
-;does not set RS (RB4) or R/W (RB5)
-    BANKSEL TRISC
-    CLRF TRISC	    ;set PORTC as output
-    BANKSEL PORTC
-    MOVWF TEMP_REG  ;save W to be loaded back later
-    
-    ;bitmask lower nibble of W onto PORTC
-    ANDLW 0x0F	    ;clear MSB of W
-    IORWF PORTC,F   ;output 1's from W_L to PORTC
-    XORLW 0xF0	    ;set MSB of W
-    ANDWF PORTC,F   ;output 0's from W_L to PORTC
-    
-    ;toggle enable
-    BSF PORTC,LCD_E	    ;toggle enable on
-    nop
-    nop
-    BCF PORTC,LCD_E	    ;toggle enable off
-    
-    MOVFW TEMP_REG  ;restore W
-    RETURN
-    
-;###END#OF#CALL###
-
-;*******************************************************************************
-;	combines all LCD write functions into a formatted print
-;*******************************************************************************
-lcd.print.lastsample
-    MOVLW 0x01
-    MOVWF LCD_BUFFER
-    CALL lcd.command	;sends clear command
-    
-    MOVFW READ_TEMPERATURE
-    CALL BINtoLCD	;outputs=BCD_H and BCD_L
-	MOVFW BCD_H
-	MOVWF LCD_BUFFER
-	CALL lcd.data	;sends temp_10s to display
-    
-	MOVFW BCD_L
-	MOVWF LCD_BUFFER
-	CALL lcd.data	;sends temp_1s to display
-	MOVLW b'11011111'	;degrees symbol
-	MOVWF LCD_BUFFER
-	
-	CALL lcd.data	;text to display
-	MOVLW 'C'
-	MOVWF LCD_BUFFER
-	CALL lcd.data	;text to display
-    
-    MOVLW b'11000000'	;1,addr=100 0000 (40h)
-    MOVWF LCD_BUFFER
-    CALL lcd.command	;sends newline command (set address=40h)
-	
-    MOVFW READ_HUMIDITY
-    CALL BINtoLCD	;outputs=BCD_H and BCD_L
-	MOVFW BCD_H
-	MOVWF LCD_BUFFER
-	CALL lcd.data	;sends humidity_10s to display
-    
-	MOVFW BCD_L
-	MOVWF LCD_BUFFER
-	CALL lcd.data	;sends humidity_1s to display
-	
-	MOVLW '%'	;degrees symbol
-	MOVWF LCD_BUFFER
-	CALL lcd.data	;text to display
-    
-
-;###END#OF#CALL###
-    
-;*******************************************************************************
-;	writes values to the RTC
-;writes CUR_TIME_H, CUR_TIME_L to RTC
-;*******************************************************************************
-;needs a re-write to improve efficiency (only write to registers used)
-RTC.write
-    ;we do a burst write to the RTC
-    ;NOTE::: we send in order of LSB->MSB
-
-    BCF RTC_SCLK
-    BCF RTC_CE
-    
-    BANKSEL TRISA
-    BCF TRISA,2	;set RTC CE output
-    BCF TRISC,0	;set RTC SCLK output
-    BCF TRISC,1	;set RTC IO output
-    BANKSEL PORTC
-    
-    BSF RTC_CE			;enable TX
-    ;first we must clear the write protect bit
-    ;---------------------------------------------------------------------------
-    MOVLW b'10010000'		;1,calendar/clock,adr=8,write
-    MOVWF RTC_BUFFER
-    CALL RTC.write.TX
-    ;---------------------------------------------------------------------------
-    MOVLW b'00000000'		;write protect=0
-    MOVWF RTC_BUFFER
-    CALL RTC.write.TX
-    ;---------------------------------------------------------------------------
-    BCF RTC_CE			;end TX
-    
-    ;we now can write the the device.
-    BSF RTC_CE			;enable TX
-    ;---------------------------------------------------------------------------
-    MOVLW b'10111110'		;1,calendar/clock,burst mode,write
-    MOVWF RTC_BUFFER
-    CALL RTC.write.TX
-    ;---------------------------------------------------------------------------
-    MOVLW b'00000000'		;Clock Halt=0,10seconds=0,seconds=0
-    MOVWF RTC_BUFFER
-    CALL RTC.write.TX
-    ;---------------------------------------------------------------------------
-    ;function to get Minutes as BCD xHHHLLLL H=10's L=1's
-    MOVFW CUR_TIME_L	    ;move value to write into W
-    CALL BINtoBCD	    ;outputs W into BCD_L and BCD_H
-    SWAPF BCD_H,F	    ;get BCD_H as HHHH0000
-    
-    MOVFW BCD_L		    ;start with W=0000LLLL
-    IORWF BCD_H,W	    ;now get	W=HHHHLLLL
-    ;note that HHHH will always be of the form 0HHH since H<=6
-    ;so W= 0HHHLLLL which is what our goal is
-    
-    MOVWF RTC_BUFFER	    ;0,10minutes,minutes
-    CALL RTC.write.TX
-    ;---------------------------------------------------------------------------
-    ;function to get Hours as BCD 10HHLLLL H=10's L=1's (24hr format)
-    MOVFW CUR_TIME_H	    ;move value to write into W
-    CALL BINtoBCD	    ;outputs W into BCD_L and BCD_H
-    SWAPF BCD_H,F	    ;get BCD_H as HHHH0000
-    
-    MOVFW BCD_L		    ;start with W=0000LLLL
-    IORWF BCD_H,W	    ;now get	W=HHHHLLLL
-    ;note that HHHH will always be of the form 00HH since H<=2
-    ;so W= 00HHLLLL which is what our goal is
-    
-    MOVWF RTC_BUFFER	    ;0,0,10hours,hours as desired
-    CALL RTC.write.TX
-    ;---------------------------------------------------------------------------
-    MOVLW b'00000001'		;date=1
-    MOVWF RTC_BUFFER
-    CALL RTC.write.TX
-    ;---------------------------------------------------------------------------
-    MOVLW b'00000001'		;month=1
-    MOVWF RTC_BUFFER
-    CALL RTC.write.TX
-    ;---------------------------------------------------------------------------
-    MOVLW b'00000001'		;day=1
-    MOVWF RTC_BUFFER
-    CALL RTC.write.TX
-    ;---------------------------------------------------------------------------
-    MOVLW b'00000000'		;year=0
-    MOVWF RTC_BUFFER
-    CALL RTC.write.TX
-    ;---------------------------------------------------------------------------
-    MOVLW b'10000000'		;write protect=1
-    MOVWF RTC_BUFFER
-    CALL RTC.write.TX
-    ;---------------------------------------------------------------------------
-    BCF RTC_CE			;end TX
-    
-    BANKSEL TRISA
-    BSF TRISC,0	;set RTC SCLK input
-    BSF TRISC,1	;set RTC IO input
-    BANKSEL 0x00
-    
-    RETURN
-    
-;###END#OF#CALL###    
-
-;*******************************************************************************
-;	serial transmit for RTC read&write
-;*******************************************************************************
-RTC.write.TX    
-;this function is a serial transmit
-;it sends a byte 1 by 1 out onto the RTC IO pin
-;also controls SCLK behaviour required for the serial TX
-    CLRF TEMP_REG
-    BSF TEMP_REG,3		;TEMP_REG=8
-    
-RTC.write.TX.loop    
-    BTFSS RTC_BUFFER,0		;test RTC_BUFFER LSB
-    GOTO $+3
-    BSF RTC_IO			;set RTC_IO if RTC_BUFFER LSB=set
-    GOTO $+2
-    BCF RTC_IO			;clear RTC_IO if RTC_BUFFER LSB=clear
-    
-    BSF RTC_SCLK		;toggle RTC serial clock
-    nop
-    BCF RTC_SCLK
-    
-    RRF RTC_BUFFER,F		;RTC_BUFFER,1 -> RTC_BUFFER,0
-    DECFSZ TEMP_REG,F		;repeat 8 times
-    GOTO RTC.write.TX.loop
-    RRF RTC_BUFFER,F		;set values as before
-    RETURN
-;###END#OF#CALL###    
-    
-;*******************************************************************************
-;	read current values on the RTC
-;*******************************************************************************
-RTC.read    
-    
-    BANKSEL TRISA
-    BCF TRISA,2	;set RTC CE output
-    BCF TRISC,0	;set RTC SCLK output
-    BCF TRISC,1	;set RTC IO output
-    BANKSEL PORTC
-    
-    ;---------------------------------------------------------------------------
-    BSF RTC_CE			;enable TX/RX
-    MOVLW b'10000101'		;1,calendar/clock,adr=2,read
-    MOVWF RTC_BUFFER
-    CALL RTC.write.TX		;send address and specify read mode
-    
-    BANKSEL TRISA
-    BSF TRISC,0	;set RTC SCLK input
-    BSF TRISC,1	;set RTC IO input
-    BANKSEL PORTC
-    
-    CALL RTC.read.RX		;receive data in RTC minutes reg into RTC_BUFFER
-    MOVFW RTC_BUFFER
-    MOVWF READ_TIME_L
-    BCF RTC_CE			;end TX/RX
-    ;---------------------------------------------------------------------------
-    BSF RTC_CE			;enable TX/RX
-
-    BANKSEL TRISA
-    BCF TRISC,0	;set RTC SCLK output
-    BCF TRISC,1	;set RTC IO output
-    BANKSEL PORTC
-
-    MOVLW b'10000111'		;1,calendar/clock,adr=3,read
-    MOVWF RTC_BUFFER
-    CALL RTC.write.TX		;send address and specify read mode
-    
-    BANKSEL TRISA
-    BSF TRISC,0	;set RTC SCLK input
-    BSF TRISC,1	;set RTC IO input
-    BANKSEL PORTC
-    
-    CALL RTC.read.RX		;receive data in RTC minutes reg into RTC_BUFFER
-    MOVFW RTC_BUFFER
-    MOVWF READ_TIME_H
-    BCF RTC_CE			;end TX/RX
-    ;---------------------------------------------------------------------------
-    
-    
-    
-    
-    RETURN
-;###END#OF#CALL###    
-;*******************************************************************************
-;	serial receive for RTC read
-;*******************************************************************************
-RTC.read.RX    
-;this function is a serial receive
-;it gets in a byte 1 by 1 on the the RTC IO pin
-;also controls SCLK behaviour required for the serial RX
-    ;RTC_IO = PORTC,1
-    ;RTC_SCLK = PORTC,0
-    
-    CLRF TEMP_REG
-    BSF TEMP_REG,3		;TEMP_REG=8
-    
-RTC.write.RX.loop    
-    BSF RTC_SCLK		;toggle RTC serial clock high
-    
-    BTFSS RTC_IO		;test RTC_BUFFER LSB
-    GOTO $+3
-    BSF RTC_BUFFER,0			;set RTC_IO if RTC_BUFFER LSB=set
-    GOTO $+2
-    BCF RTC_BUFFER,0			;clear RTC_IO if RTC_BUFFER LSB=clear
-    
-    BCF RTC_SCLK		;toggle RTC serial clock low
-    
-    
-    RLF RTC_BUFFER,F		;RTC_BUFFER,0 -> RTC_BUFFER,1
-    DECFSZ TEMP_REG,F		;repeat 8 times
-    GOTO RTC.write.RX.loop
-    RLF RTC_BUFFER,F
-    RETURN
-;###END#OF#CALL###      
-    
-    
-;*******************************************************************************
-;	a generic LCD print function that will print any ascii array
-;*******************************************************************************
-;inspired by this code http://www.microchip.com/forums/m90152.aspx
-lcd.printline	;prints a line of text     
-    
-    BANKSEL Input1
-    MOVFW Input1
-    BANKSEL EEADR
-    MOVWF EEADR
-    BANKSEL Input2
-    MOVFW Input2
-    BANKSEL EEADR
-    MOVWF EEADRH
-    
-lcd.printline.loop
-    CALL eeprom.ReadProgMem
-    MOVFW CHAR_H	;test for NullChar
-    BTFSC STATUS,Z	;if zero, end routine, else print
-	GOTO lcd.printline.end		;end
-    MOVWF LCD_BUFFER	;print
-    CALL lcd.data
-    
-    MOVFW CHAR_L	;test for NullChar
-    BTFSC STATUS,Z	;if zero, end routine, else print
-	GOTO lcd.printline.end		;end
-    MOVWF LCD_BUFFER	;print
-    CALL lcd.data
-	
-    BANKSEL EEADR
-	INCF EEADR,F	;move to next memory address
-    BTFSC STATUS,C	;if carry set, we have a rollover, so inc EEADRH
-	INCF EEADRH,F
-    GOTO lcd.printline.loop 
-    
-lcd.printline.end
-    
-    RETURN
-    
-;*******************************************************************************
-;	uses eeprom to read ascii data stored in program memory
-;*******************************************************************************
-eeprom.ReadProgMem
-    ;mostly used example 10-3 from the datasheet as a reference
-    BANKSEL EECON1
-    BSF EECON1, EEPGD	;program memory
-    BSF EECON1, RD	;EE read
-    nop
-    nop
-    BANKSEL EEDAT
-    MOVFW EEDAT
-    BANKSEL 0x00
-    MOVWF CHAR_L
-    BANKSEL EEDAT
-    MOVFW EEDATH
-    BANKSEL 0x00
-    MOVWF CHAR_H
-    ;input was as follows (7H 7L)   : HHHHHHHLLLLLLL
-    ;output is as follows	    : 00HHHHHH  HLLLLLLL
-    ;as such we must shift the MSB of CHAR_L into CHAR_H
-    RLF CHAR_L,W		    ;MSB CHAR_L -> Carry, does not affect CHAR_L
-    RLF CHAR_H,F		    ;Carry -> LSB CHAR_H
-    BCF CHAR_H,7		    ;clear the MSB of CHAR_H
-    BCF CHAR_L,7		    ;clear the MSB of CHAR_L
-    
-    RETURN
-;###END#OF#CALL###
-
     
 Poll_Button_Up    
     
@@ -1144,9 +683,501 @@ Poll_Button_Mode.PressedState.Pressed
 Poll_Button_Mode.End
     RETURN
     
+;###END#OF#CALL###    
+    
+;*******************************************************************************
+;	writes values to the RTC
+;writes CUR_TIME_H, CUR_TIME_L to RTC
+;*******************************************************************************
+;needs a re-write to improve efficiency (only write to registers used)
+RTC.write
+    ;we do a burst write to the RTC
+    ;NOTE::: we send in order of LSB->MSB
+
+    BCF RTC_SCLK
+    BCF RTC_CE
+    
+    BANKSEL TRISA
+    BCF TRISA,2	;set RTC CE output
+    BCF TRISC,0	;set RTC SCLK output
+    BCF TRISC,1	;set RTC IO output
+    BANKSEL PORTC
+    
+    BSF RTC_CE			;enable TX
+    ;first we must clear the write protect bit
+    ;---------------------------------------------------------------------------
+    MOVLW b'10010000'		;1,calendar/clock,adr=8,write
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    MOVLW b'00000000'		;write protect=0
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    BCF RTC_CE			;end TX
+    
+    ;we now can write the the device.
+    BSF RTC_CE			;enable TX
+    ;---------------------------------------------------------------------------
+    MOVLW b'10111110'		;1,calendar/clock,burst mode,write
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    MOVLW b'00000000'		;Clock Halt=0,10seconds=0,seconds=0
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    ;function to get Minutes as BCD xHHHLLLL H=10's L=1's
+    MOVFW CUR_TIME_L	    ;move value to write into W
+    CALL BINtoBCD	    ;outputs W into BCD_L and BCD_H
+    SWAPF BCD_H,F	    ;get BCD_H as HHHH0000
+    
+    MOVFW BCD_L		    ;start with W=0000LLLL
+    IORWF BCD_H,W	    ;now get	W=HHHHLLLL
+    ;note that HHHH will always be of the form 0HHH since H<=6
+    ;so W= 0HHHLLLL which is what our goal is
+    
+    MOVWF RTC_BUFFER	    ;0,10minutes,minutes
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    ;function to get Hours as BCD 10HHLLLL H=10's L=1's (24hr format)
+    MOVFW CUR_TIME_H	    ;move value to write into W
+    CALL BINtoBCD	    ;outputs W into BCD_L and BCD_H
+    SWAPF BCD_H,F	    ;get BCD_H as HHHH0000
+    
+    MOVFW BCD_L		    ;start with W=0000LLLL
+    IORWF BCD_H,W	    ;now get	W=HHHHLLLL
+    ;note that HHHH will always be of the form 00HH since H<=2
+    ;so W= 00HHLLLL which is what our goal is
+    
+    MOVWF RTC_BUFFER	    ;0,0,10hours,hours as desired
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    MOVLW b'00000001'		;date=1
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    MOVLW b'00000001'		;month=1
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    MOVLW b'00000001'		;day=1
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    MOVLW b'00000000'		;year=0
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    MOVLW b'10000000'		;write protect=1
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX
+    ;---------------------------------------------------------------------------
+    BCF RTC_CE			;end TX
+    
+    BANKSEL TRISA
+    BSF TRISC,0	;set RTC SCLK input
+    BSF TRISC,1	;set RTC IO input
+    BANKSEL 0x00
+    
+    RETURN
+    
+;###END#OF#CALL###    
+
+;*******************************************************************************
+;	serial transmit for RTC read&write
+;*******************************************************************************
+RTC.write.TX    
+;this function is a serial transmit
+;it sends a byte 1 by 1 out onto the RTC IO pin
+;also controls SCLK behaviour required for the serial TX
+    CLRF TEMP_REG
+    BSF TEMP_REG,3		;TEMP_REG=8
+    
+RTC.write.TX.loop    
+    BTFSS RTC_BUFFER,0		;test RTC_BUFFER LSB
+    GOTO $+3
+    BSF RTC_IO			;set RTC_IO if RTC_BUFFER LSB=set
+    GOTO $+2
+    BCF RTC_IO			;clear RTC_IO if RTC_BUFFER LSB=clear
+    
+    BSF RTC_SCLK		;toggle RTC serial clock
+    nop
+    BCF RTC_SCLK
+    
+    RRF RTC_BUFFER,F		;RTC_BUFFER,1 -> RTC_BUFFER,0
+    DECFSZ TEMP_REG,F		;repeat 8 times
+    GOTO RTC.write.TX.loop
+    RRF RTC_BUFFER,F		;set values as before
+    RETURN
+;###END#OF#CALL###    
+    
+;*******************************************************************************
+;	read current values on the RTC
+;*******************************************************************************
+RTC.read    
+    
+    BANKSEL TRISA
+    BCF TRISA,2	;set RTC CE output
+    BCF TRISC,0	;set RTC SCLK output
+    BCF TRISC,1	;set RTC IO output
+    BANKSEL PORTC
+    
+    ;---------------------------------------------------------------------------
+    BSF RTC_CE			;enable TX/RX
+    MOVLW b'10000101'		;1,calendar/clock,adr=2,read
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX		;send address and specify read mode
+    
+    BANKSEL TRISA
+    BSF TRISC,0	;set RTC SCLK input
+    BSF TRISC,1	;set RTC IO input
+    BANKSEL PORTC
+    
+    CALL RTC.read.RX		;receive data in RTC minutes reg into RTC_BUFFER
+    MOVFW RTC_BUFFER
+    MOVWF READ_TIME_L
+    BCF RTC_CE			;end TX/RX
+    ;---------------------------------------------------------------------------
+    BSF RTC_CE			;enable TX/RX
+
+    BANKSEL TRISA
+    BCF TRISC,0	;set RTC SCLK output
+    BCF TRISC,1	;set RTC IO output
+    BANKSEL PORTC
+
+    MOVLW b'10000111'		;1,calendar/clock,adr=3,read
+    MOVWF RTC_BUFFER
+    CALL RTC.write.TX		;send address and specify read mode
+    
+    BANKSEL TRISA
+    BSF TRISC,0	;set RTC SCLK input
+    BSF TRISC,1	;set RTC IO input
+    BANKSEL PORTC
+    
+    CALL RTC.read.RX		;receive data in RTC minutes reg into RTC_BUFFER
+    MOVFW RTC_BUFFER
+    MOVWF READ_TIME_H
+    BCF RTC_CE			;end TX/RX
+    ;---------------------------------------------------------------------------
+    
+    RETURN
+;###END#OF#CALL###    
+    
+    
+    
+;*******************************************************************************
+;	serial receive for RTC read
+;*******************************************************************************
+RTC.read.RX    
+;this function is a serial receive
+;it gets in a byte 1 by 1 on the the RTC IO pin
+;also controls SCLK behaviour required for the serial RX
+    ;RTC_IO = PORTC,1
+    ;RTC_SCLK = PORTC,0
+    
+    CLRF TEMP_REG
+    BSF TEMP_REG,3		;TEMP_REG=8
+    
+RTC.write.RX.loop    
+    BSF RTC_SCLK		;toggle RTC serial clock high
+    
+    BTFSS RTC_IO		;test RTC_BUFFER LSB
+    GOTO $+3
+    BSF RTC_BUFFER,0			;set RTC_IO if RTC_BUFFER LSB=set
+    GOTO $+2
+    BCF RTC_BUFFER,0			;clear RTC_IO if RTC_BUFFER LSB=clear
+    
+    BCF RTC_SCLK		;toggle RTC serial clock low
+    
+    
+    RLF RTC_BUFFER,F		;RTC_BUFFER,0 -> RTC_BUFFER,1
+    DECFSZ TEMP_REG,F		;repeat 8 times
+    GOTO RTC.write.RX.loop
+    RLF RTC_BUFFER,F
+    RETURN
+;###END#OF#CALL###  
+    
+;*******************************************************************************
+;	binary -> BCD outputs W as BCD_L and BCD_H
+;*******************************************************************************
+BINtoBCD
+							
+    ;DISP_BUFF_H = quotient
+    ;DISP_BUFF_L = remainder
+    CLRF   BCD_H		;clear our quotient
+    MOVWF   BCD_L		;store the number to be divided
+    
+    MOVLW   0x0A			;load 10 into W
+
+Div10Loop
+    SUBWF   BCD_L,1	;subtract 10 from number
+    BTFSC   BCD_L,7	;test for -ve
+    GOTO    Div10Finished	;if number is -ve, goto finshed
+    
+    INCF    BCD_H,F
+    GOTO    Div10Loop
+
+Div10Finished
+    ADDWF   BCD_L,1	;undo last subtraction to get remainder
+    
+    RETURN
+    
 ;###END#OF#CALL###
     
-printTable
-LOOKUP1	DA "213562404",0
+    
+    
+    
+    
+;-------------------------------------------------------------------------------    
+;===============================================================================    
+;-------------------------------------------------------------------------------
+;			    LCD CODE BELOW HERE    
+;-------------------------------------------------------------------------------    
+;===============================================================================    
+;-------------------------------------------------------------------------------    
+    
+    
+    
+    
+BINtoLCD
+;*******************************************************************************
+;	binary -> BCD -> LCD outputs W as BCD_L and BCD_H in ascii
+;*******************************************************************************
+    CALL BINtoBCD
+    MOVLW b'00110000'
+    ADDWF BCD_L,F
+    ADDWF BCD_H,F
+    
+    RETURN
+;###END#OF#CALL###
+    
+;*******************************************************************************
+; LCD write data - writes data in LCD_BUFFER to the LCD 
+; LCD write command - writes commands to in LCD_BUFFER to the LCD
+;
+; note only difference is: data mode sets RC4, command mode clears RC4
+;*******************************************************************************
+
+;this controls whether it is data or command
+lcd.data
+    CALL test_busy_flag		    ;outputs in bank0, write mode
+    BSF PORTC,LCD_RS			    ;set to data mode
+    GOTO $+3
+lcd.command
+    CALL test_busy_flag		    ;outputs in bank0, write mode
+    BCF PORTC,LCD_RS			    ;set to command mode
+;part below this is the write part of lcd.data and lcd.command
+    
+    SWAPF LCD_BUFFER,W		    ;move LCD_BUFFER<4:7> to W<0:3>
+    CALL lcd.write			    ;write W<0:3> to LCD<4:7>
+    
+    MOVFW LCD_BUFFER		    ;move LCD_BUFFER<0:3> to W<0:3>
+    CALL lcd.write			    ;write W<0:3> to LCD<4:7>
+    
+    CALL delay_10_ms
+    
+    RETURN
+;###END#OF#CALL###
+    
+;*******************************************************************************
+;	tests the busy flag and exits when LCD not busy
+;*******************************************************************************
+test_busy_flag
+;    Pin config: RC<0:3>    =LCD D<4:7>	(datapins)                             *          
+;		 RC4	    =LCD RS	(reg select data=1 command=0)	       *	           
+;		 RC6	    =LCD R/W	(write=0/read=1)		       *		           
+;		 RC7	    =LCD E	(enable=1)			       *
+    ;waits until busy flag is cleared
+    ;outputs: MCU = bank0; LCD= write mode
+    BANKSEL TRISC
+    BSF TRISC,LCD_BF			    ;set RC3 as input to test busy flag
+    BANKSEL PORTC
+
+    
+    BSF PORTC,LCD_RW			    ;set to read mode
+    BCF PORTC,LCD_RS			    ;set to command mode
+    
+    nop
+    BSF PORTC,LCD_E			    ;pulse enable bit
+    nop
+    nop
+    BCF PORTC,LCD_E
+    
+    BTFSC PORTC,LCD_BF		    ;test busy flag until cleared
+    GOTO $-6
+    
+    BANKSEL TRISC
+    BCF TRISC,LCD_BF			    ;set RC3 as output
+    BANKSEL PORTC
+    
+    BCF PORTC,LCD_RW			    ;back into write mode
+    RETURN
+    
+;###END#OF#CALL###
+
+;*******************************************************************************
+;	performs the write actions for the LCD
+;*******************************************************************************
+
+lcd.write
+;writes to LCD, moves WREG<0:3> -> PORTC<0:3> == LCD DB<4:7>
+;does not set RS (RB4) or R/W (RB5)
+    BANKSEL TRISC
+    CLRF TRISC	    ;set PORTC as output
+    BANKSEL PORTC
+    MOVWF TEMP_REG  ;save W to be loaded back later
+    
+    ;bitmask lower nibble of W onto PORTC
+    ANDLW 0x0F	    ;clear MSB of W
+    IORWF PORTC,F   ;output 1's from W_L to PORTC
+    XORLW 0xF0	    ;set MSB of W
+    ANDWF PORTC,F   ;output 0's from W_L to PORTC
+    
+    ;toggle enable
+    BSF PORTC,LCD_E	    ;toggle enable on
+    nop
+    nop
+    BCF PORTC,LCD_E	    ;toggle enable off
+    
+    MOVFW TEMP_REG  ;restore W
+    RETURN
+    
+;###END#OF#CALL###
+
+;*******************************************************************************
+;	combines all LCD write functions into a formatted print
+;*******************************************************************************
+lcd.print.lastsample
+    CALL lcd.clear	;sends clear command
+    
+    MOVFW READ_TEMPERATURE
+    CALL BINtoLCD	;outputs=BCD_H and BCD_L
+	MOVFW BCD_H
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;sends temp_10s to display
+    
+	MOVFW BCD_L
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;sends temp_1s to display
+	MOVLW b'11011111'	;degrees symbol
+	MOVWF LCD_BUFFER
+	
+	CALL lcd.data	;text to display
+	MOVLW 'C'
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;text to display
+    
+    CALL lcd.newline	;sends newline command (set address=40h)
+	
+    MOVFW READ_HUMIDITY
+    CALL BINtoLCD	;outputs=BCD_H and BCD_L
+	MOVFW BCD_H
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;sends humidity_10s to display
+    
+	MOVFW BCD_L
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;sends humidity_1s to display
+	
+	MOVLW '%'	;degrees symbol
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;text to display
+    
+
+;###END#OF#CALL###
+    
+    
+    
+    
+;*******************************************************************************
+;	a generic LCD print function that will print any ascii array
+;*******************************************************************************
+;inspired by this code http://www.microchip.com/forums/m90152.aspx
+lcd.printString	;prints a line of text     
+    
+    BANKSEL Input1
+    MOVFW Input1
+    BANKSEL EEADR
+    MOVWF EEADR
+    BANKSEL Input2
+    MOVFW Input2
+    BANKSEL EEADR
+    MOVWF EEADRH
+    
+lcd.printString.loop
+    CALL eeprom.ReadProgMem
+    MOVFW CHAR_H	;test for NullChar
+    BTFSC STATUS,Z	;if zero, end routine, else print
+	GOTO lcd.printString.end		;end
+    MOVWF LCD_BUFFER	;print
+    CALL lcd.data
+    
+    MOVFW CHAR_L	;test for NullChar
+    BTFSC STATUS,Z	;if zero, end routine, else print
+	GOTO lcd.printString.end		;end
+    MOVWF LCD_BUFFER	;print
+    CALL lcd.data
+	
+    BANKSEL EEADR
+	INCF EEADR,F	;move to next memory address
+    BTFSC STATUS,C	;if carry set, we have a rollover, so inc EEADRH
+	INCF EEADRH,F
+    GOTO lcd.printString.loop 
+    
+lcd.printString.end
+    
+    RETURN
+    
+;*******************************************************************************
+;	uses eeprom to read ascii data stored in program memory
+;*******************************************************************************
+eeprom.ReadProgMem
+    ;mostly used example 10-3 from the datasheet as a reference
+    BANKSEL EECON1
+    BSF EECON1, EEPGD	;program memory
+    BSF EECON1, RD	;EE read
+    nop
+    nop
+    BANKSEL EEDAT
+    MOVFW EEDAT
+    BANKSEL 0x00
+    MOVWF CHAR_L
+    BANKSEL EEDAT
+    MOVFW EEDATH
+    BANKSEL 0x00
+    MOVWF CHAR_H
+    ;input was as follows (7H 7L)   : HHHHHHHLLLLLLL
+    ;output is as follows	    : 00HHHHHH  HLLLLLLL
+    ;as such we must shift the MSB of CHAR_L into CHAR_H
+    RLF CHAR_L,W		    ;MSB CHAR_L -> Carry, does not affect CHAR_L
+    RLF CHAR_H,F		    ;Carry -> LSB CHAR_H
+    BCF CHAR_H,7		    ;clear the MSB of CHAR_H
+    BCF CHAR_L,7		    ;clear the MSB of CHAR_L
+    
+    RETURN
+;###END#OF#CALL###
+
+;*******************************************************************************
+;   commonly used LCD commands
+;*******************************************************************************
+    
+lcd.clear
+    MOVLW 0x01
+    MOVWF LCD_BUFFER
+    CALL lcd.command	;sends clear command
+    RETURN
+    
+lcd.newline
+    MOVLW b'11000000'	;1,addr=100 0000 (40h)
+    MOVWF LCD_BUFFER
+    CALL lcd.command	;sends newline command (set address=40h)
+    RETURN
+    
+;###END#OF#CALL###
+
+    
+;LCD ascii arrays:    
+StudentNumber	DA "213562404",0
     
     END
