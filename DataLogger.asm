@@ -8,7 +8,7 @@
 ;    Description:                                                              *
 ;    Pin config: RC<0:3>    =LCD D<4:7>	(datapins)                             *          
 ;		 RC4	    =LCD RS	(reg select data=1 command=0)	       *	           
-;		 RC6	    =LCD R/W	(write=0/read=1)		       *		           
+;		 RC6	    =					       *		           
 ;		 RC7	    =LCD E	(enable=1)			       *
 ;                RB4	    =Temperature sensor                                *    
 ;                RB5        =Humidity sensor                                   *    
@@ -33,7 +33,6 @@
 #define	LCD_RS	4		; 0 = Command, 1 = Data
 #define LCD_RW	6		; 0 = Write, 1 = Read
 #define LCD_E	7		
-#define LCD_BF	3		; LCD_D7 = BF in read mode
 #define Button_Down PORTA,0
 #define Button_Up PORTA,1
 #define Button_Mode PORTB,7
@@ -43,10 +42,16 @@
 #define RTC_CE PORTA,2
 #define RTC_IO PORTC,5
 #define RTC_SCLK PORTC,0
+#define StateBit1 STATE,3
+#define StateBit2 STATE,4
+#define TimeoutDelay .3
+#define UpButtonPending STATE,5
+#define DownButtonPending STATE,6
+#define ModeButtonPending STATE,7
  
 ;REGISTERS
 variables udata
-READ_EEADR   res 1	    ;stores value of current EEADR + 1 (for cycling through EEDAT)
+READ_EEADR   res 1	    ;stores value of latest written EEADR + 1 (for cycling through EEDAT)
 READ_TEMPERATURE res 1	    ;stores last temperature we read from the sensor
 READ_HUMIDITY	res 1	    ;stores last humidity we read from the sensor
 READ_TIME_L  res 1	    ;stores minutes we last read from the RTC
@@ -66,6 +71,12 @@ STATE	res 1		    ;state register
 ;-------x		    ;button_up state 0=released 1=pressed
 ;------x-		    ;button_down state 0=released 1=pressed
 ;-----x--		    ;button_mode state 0=released 1=pressed
+;----x---		    ;FSM current state bit 1
+;---x----		    ;FSM current state bit 2
+;--x-----		    ;button_up press read
+;-x------		    ;button_down press read
+;x-------		    ;button_mode state read
+;press read indicates a pending read on the button, cleared if no press or if read 
 D1  res 1		    ;delay register 1
 D2  res 1		    ;delay resgiter 2
 TD1 res 1		    ;timer delay register 1(for 1 sec)
@@ -82,7 +93,7 @@ Button_Mode_Counter res 1	    ;used for tracking mode button state
 Input1 res 1		    ;used as a generic input for multiple input functions
 Input2 res 1		    ;used as a generic input for multiple input functions
 W_TEMP res 1		    ;context saving 
- 
+State_Timeout res 1	    ;a timeout for state transitions
  
 RES_VECT  CODE    0x0000            ; processor reset vector
     GOTO    SETUP                   ; go to beginning of program
@@ -141,6 +152,7 @@ TMR0_ISR	;happens once every 10ms
     CALL Poll_Button_Up
     CALL Poll_Button_Down
     CALL Poll_Button_Mode
+    CALL UpdateState
     ;------10MS ISR content end
     DECFSZ TD1,F	    ;count down from 100 every 10ms
     GOTO $+2
@@ -151,7 +163,7 @@ TMR0_ISR.1sec		    ;happens once every 1sec
     MOVLW .100		    ;reset count for 1 sec
     MOVWF TD1
     ;------1SEC ISR content start
-    
+    DECF State_Timeout	    ;for state transitioning
     ;------1SEC ISR content end    
     DECFSZ TD2,F	    ;count down from 60 every 1 sec
     GOTO $+2
@@ -203,7 +215,7 @@ SETUP
 ;-------------------------------------------------------------------------------
 ;    Pin config: RC<0:3>    =LCD D<4:7>	(datapins)                             *          
 ;		 RC4	    =LCD RS	(reg select data=1 command=0)	       *	           
-;		 RC6	    =LCD R/W	(write=0/read=1)		       *		           
+;		 RC6	    =		       *		           
 ;		 RC7	    =LCD E	(enable=1)			       *
     
     MOVLW 0xff
@@ -225,7 +237,6 @@ SETUP
     
     ;currently in 8-bit, move into 4-bit
     
-    CALL test_busy_flag		    ;outputs in bank0, write mode
     MOVLW b'00000010'		    ;4-bit mode
     MOVWF PORTC
     BSF PORTC,LCD_E			    ;toggle enable pin
@@ -262,7 +273,6 @@ SETUP
     
 ;==================END=ADC=config======== 
  
-    ;delay by 50ms for the LCD to initialize
 
     ;set the timer up for counting
     BANKSEL OPTION_REG						     
@@ -287,7 +297,7 @@ SETUP
     MOVLW .1
     MOVWF TD3	;set delay3=5x1min	(so 5 minute intervals)
     
-    CALL lcd.print.lastsample
+    ;CALL lcd.print.lastsample
     BSF INTCON, GIE			;enable global interrupts
 
     
@@ -297,26 +307,253 @@ SETUP
 START
     GOTO START
 
-;*******************************************************************************
-; Delay 10 ms -> 10ms delay 
-;*******************************************************************************
-delay_10_ms
-    ;goto=2 cyles, decfsz=1 cycle, if zero=2 cycles
-    MOVLW .40
-    MOVWF D2
 
-;if innerloopnumber=82, total cycles=10082, which is close enough to 10ms
-    MOVLW .83	;approx 1/4 ms
-    MOVWF D1	
+
+;*******************************************************************************
+; Update State 
+;*******************************************************************************
+UpdateState
+    ;States:
+    ;s1	display mode	-	current			    SB1=0 SB2=0
+    ;s2	display mode	-	log			    SB1=0 SB2=1
+    ;s3	reset mode	-	hours			    SB1=1 SB2=0
+    ;s4	reset mode	-	minutes			    SB1=1 Sb2=1
     
-    DECFSZ D1,F	;count until D1=0
-    GOTO $-1	;keep counting down until
-    DECFSZ D2,F	;D1=0, so count down D2, and reset D1 until D2=0
-    GOTO $-4	;reset D1
+    ;if (s1<00>){
+    ;	up/down press to move to s2
+    ;	mode select press to move to s3
+    ;	}
+    ;if (s2<01>){
+    ;	up/down press to scroll through log
+    ;	timeout for transition back to current
+    ;	}
+    ;if (s3<10>){
+    ;	up/down press for changing hours
+    ;	mode select press to go to s4
+    ;	timeout to cancel reset and go back to s1
+    ;	}
+    ;if (s4<11>){
+    ;	up/down press for changing minutes
+    ;	mode select press to reset and go to s1
+    ;	timeout to cancel reset and go back to s1
+    ;	}
+    
+    
+    ;reset timeout if a button is depressed(state=set)
+    MOVLW TimeoutDelay	    
+    BTFSC Button_Down.State ;do next if set
+	MOVWF State_Timeout
+    BTFSC Button_Up.State   ;do next if set
+	MOVWF State_Timeout
+    BTFSC Button_Mode.State ;do next if set
+	MOVWF State_Timeout
+    
+    
+    BTFSS StateBit1
+    GOTO UpdateState.SB1clear
+    GOTo UpdateState.SB1set
+    
+UpdateState.SB1clear
+    BTFSS StateBit2
+    GOTO UpdateState.SB1clear.SB2clear
+    GOTO UpdateState.SB1clear.SB2set
+    
+UpdateState.SB1set
+    BTFSS StateBit2
+    GOTO UpdateState.SB1set.SB2clear
+    GOTO UpdateState.SB1set.SB2set
+
+;-------------------------------------------------------------------------------    
+UpdateState.SB1clear.SB2clear	;aka s1
+    ; s1 tasks:
+    
+    ;...........................................................................
+    ;up/down press to move to s2
+    ;...........................................................................
+    ;DOWN BUTTON TEST
+    BTFSS DownButtonPending		    ;if pressed transition to s2 
+    GOTO $+6	; not pressed, don't transition
+    
+    ;button pressed
+    BCF DownButtonPending
+    ;handle changing of read address
+    ;
+    ;
+    BSF StateBit2			    ;move to s2
+    
+    
+    ;UP BUTTON TEST
+    BTFSS UpButtonPending		    ;if pressed transition to s2 
+    GOTO $+6	; not pressed, don't transition
+    
+    ;button pressed
+    BCF UpButtonPending
+    ;handle changing of read address
+    ;
+    ;
+    BSF StateBit2			    ;move to s2
+    
+    
+    ;...........................................................................
+    ;	mode select press to move to s3
+    ;...........................................................................
+    ;MODE BUTTON PRESSED
+    BTFSS ModeButtonPending		    ;if pressed do next
+    GOTO $+5   ;not pressed, don't transition
+    
+    ;button pressed
+    BCF ModeButtonPending
+    BSF StateBit1			    ;goto s3
+    
+    RETURN
+
+    
+    
+    
+;-------------------------------------------------------------------------------    
+UpdateState.SB1clear.SB2set	;aka s2
+    ;s2 tasks:
+    
+    ;...........................................................................
+    ;	timeout for transition back to current
+    ;...........................................................................
+    ;TIMEOUT TEST
+    MOVFW State_Timeout
+    BTFSC STATUS,Z
+    GOTO $+3			;if not zero skip over
+    
+    BCF StateBit2		;if zero, goto s1
+    RETURN			;no need to check anything more
+    
+    ;...........................................................................
+    ;	up/down press to scroll through log
+    ;...........................................................................
+    ;TEST UP BUTTON
+    BTFSS UpButtonPending		    ;if pressed change log entry viewed
+    GOTO $+5	; not pressed, do nothing
+    
+    ;button pressed
+    BCF UpButtonPending
+    ;handle changing of read address
+    ;
+    ;
+    
+    ;TEST DOWN BUTTON
+    BTFSS DownButtonPending		    ;if pressed change log entry viewed 
+    GOTO $+5	; not pressed, do nothing
+    
+    ;button pressed
+    BCF DownButtonPending
+    ;handle changing of read address
+    ;
+    ;
+    
+    RETURN	
+    
+;-------------------------------------------------------------------------------    
+UpdateState.SB1set.SB2clear	;aka s3
+    ;s3 tasks
+    ;...........................................................................
+    ;	up/down press to change hours log
+    ;...........................................................................
+    BTFSS UpButtonPending		    ;if pressed inc hours 
+    GOTO $+5	; not pressed, do nothing
+    
+    BCF UpButtonPending
+    ;handle changing of cur hours
+    ;
+    ;
+    
+    
+    
+    BTFSS DownButtonPending		    ;if pressed dec hours 
+    GOTO $+5	; not pressed, do nothing
+    
+    BCF DownButtonPending
+    ;handle changing of cur hours
+    ;
+    ;
+    
+    ;...........................................................................
+    ;	mode select press to go to s4
+    ;...........................................................................
+    BTFSS ModeButtonPending		    ;if pressed dec hours 
+    GOTO $+5	; not pressed, do nothing
+    
+    BCF ModeButtonPending
+    ;move to state s4
+    BSF StateBit2
+    
+    
+    ;...........................................................................
+    ;	timeout to cancel reset and go back to s1
+    ;...........................................................................
+    ;TIMEOUT TEST
+    MOVFW State_Timeout
+    BTFSC STATUS,Z
+    GOTO $+2			;if not zero skip over
+    
+    BCF StateBit1
+    
+    
     RETURN
     
-;###END#OF#CALL###
+;-------------------------------------------------------------------------------    
+UpdateState.SB1set.SB2set	;aka s4
+    ;s4 tasks:
+    ;...........................................................................
+    ;	up/down press for changing minutes
+    ;...........................................................................
+    
+    BTFSS UpButtonPending		    ;if pressed inc minutes 
+    GOTO $+5	; not pressed, do nothing
+    
+    BCF UpButtonPending
+    ;handle changing of cur minutes
+    ;
+    ;
+    
+    
+    
+    BTFSS DownButtonPending		    ;if pressed dec minutes 
+    GOTO $+5	; not pressed, do nothing
+    
+    BCF DownButtonPending
+    ;handle changing of cur minutes
+    ;
+    ;
+    
+    
+    
+    
+    
+    ;...........................................................................
+    ;	mode select press to reset and go to s1
+    ;...........................................................................
+    BTFSS ModeButtonPending
+    GOTO $+3
+    
+    BCF ModeButtonPending
+    ;do a rtc write
+    BCF StateBit1		;move to s1
+    BCF StateBit2
+    
+    
+    ;...........................................................................
+    ;	timeout to cancel reset and go back to s1
+    ;...........................................................................
+    ;TIMEOUT TEST
+    MOVFW State_Timeout
+    BTFSC STATUS,Z
+    GOTO $+3			;if not zero skip over
+    
+    BCF StateBit1		;move to s1
+    BCF StateBit2
+    
+    RETURN
 
+;###END#OF#CALL###
+    
 ;*******************************************************************************
 ; EEPROM.write 
 ;*******************************************************************************
@@ -521,6 +758,8 @@ SampleData
 ;   appropriate button changes
 ;*******************************************************************************
 ButtonUp.OnPress
+    BSF UpButtonPending
+    
     CALL lcd.clear
     
 ;    MOVLW LOW StudentNumber
@@ -542,6 +781,9 @@ ButtonUp.OnPress
     RETURN
     
 ButtonDown.OnPress
+    BSF DownButtonPending
+    
+    
     CALL RTC.read
     
     MOVFW READ_TIME_H
@@ -555,6 +797,7 @@ ButtonDown.OnPress
     RETURN
     
 ButtonMode.OnPress
+    BSF ModeButtonPending
     
     RETURN
 ;###END#OF#CALL###
@@ -1042,7 +1285,25 @@ Div10Finished
 ;===============================================================================    
 ;-------------------------------------------------------------------------------    
     
+;*******************************************************************************
+; Delay 10 ms -> 10ms delay 
+;*******************************************************************************
+delay_10_ms
+    ;goto=2 cyles, decfsz=1 cycle, if zero=2 cycles
+    MOVLW .40
+    MOVWF D2
+
+;if innerloopnumber=82, total cycles=10082, which is close enough to 10ms
+    MOVLW .83	;approx 1/4 ms
+    MOVWF D1	
     
+    DECFSZ D1,F	;count until D1=0
+    GOTO $-1	;keep counting down until
+    DECFSZ D2,F	;D1=0, so count down D2, and reset D1 until D2=0
+    GOTO $-4	;reset D1
+    RETURN
+    
+;###END#OF#CALL###    
     
     
 BINtoLCD
@@ -1066,11 +1327,11 @@ BINtoLCD
 
 ;this controls whether it is data or command
 lcd.data
-    CALL test_busy_flag		    ;outputs in bank0, write mode
+    CALL delay_10_ms
     BSF PORTC,LCD_RS			    ;set to data mode
     GOTO $+3
 lcd.command
-    CALL test_busy_flag		    ;outputs in bank0, write mode
+    CALL delay_10_ms
     BCF PORTC,LCD_RS			    ;set to command mode
 ;part below this is the write part of lcd.data and lcd.command
     
@@ -1080,47 +1341,10 @@ lcd.command
     MOVFW LCD_BUFFER		    ;move LCD_BUFFER<0:3> to W<0:3>
     CALL lcd.write			    ;write W<0:3> to LCD<4:7>
     
-    CALL delay_10_ms
     
     RETURN
 ;###END#OF#CALL###
     
-;*******************************************************************************
-;	tests the busy flag and exits when LCD not busy
-;*******************************************************************************
-test_busy_flag
-;    Pin config: RC<0:3>    =LCD D<4:7>	(datapins)                             *          
-;		 RC4	    =LCD RS	(reg select data=1 command=0)	       *	           
-;		 RC6	    =LCD R/W	(write=0/read=1)		       *		           
-;		 RC7	    =LCD E	(enable=1)			       *
-    ;waits until busy flag is cleared
-    ;outputs: MCU = bank0; LCD= write mode
-    BANKSEL TRISC
-    BSF TRISC,LCD_BF			    ;set RC3 as input to test busy flag
-    BANKSEL PORTC
-
-    
-    BSF PORTC,LCD_RW			    ;set to read mode
-    BCF PORTC,LCD_RS			    ;set to command mode
-    
-    nop
-    BSF PORTC,LCD_E			    ;pulse enable bit
-    nop
-    nop
-    BCF PORTC,LCD_E
-    
-    BTFSC PORTC,LCD_BF		    ;test busy flag until cleared
-    GOTO $-6
-    
-    BANKSEL TRISC
-    BCF TRISC,LCD_BF			    ;set RC3 as output
-    BANKSEL PORTC
-    
-    BCF PORTC,LCD_RW			    ;back into write mode
-    RETURN
-    
-;###END#OF#CALL###
-
 ;*******************************************************************************
 ;	performs the write actions for the LCD
 ;*******************************************************************************
@@ -1189,7 +1413,7 @@ lcd.print.lastsample
 	MOVWF LCD_BUFFER
 	CALL lcd.data	;text to display
     
-
+    RETURN
 ;###END#OF#CALL###
     
     
