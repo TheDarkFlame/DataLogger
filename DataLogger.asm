@@ -45,8 +45,8 @@
 #define StateBit1 STATE,3
 #define StateBit2 STATE,4
 #define TimeoutDelay .3
-#define UpButtonPending STATE,5
-#define DownButtonPending STATE,6
+#define DownButtonPending STATE,5
+#define UpButtonPending STATE,6
 #define ModeButtonPending STATE,7
  
 ;REGISTERS
@@ -273,7 +273,8 @@ SETUP
     
 ;==================END=ADC=config======== 
  
-
+    BANKSEL STATE
+    CLRF STATE
     ;set the timer up for counting
     BANKSEL OPTION_REG						     
     MOVLW b'00000111'
@@ -313,6 +314,16 @@ START
 ; Update State 
 ;*******************************************************************************
 UpdateState
+;    STATE	res 1	    ;state register
+;-------x		    ;button_up state 0=released 1=pressed
+;------x-		    ;button_down state 0=released 1=pressed
+;-----x--		    ;button_mode state 0=released 1=pressed
+;----x---		    ;FSM current state bit 1
+;---x----		    ;FSM current state bit 2
+;--x-----		    ;button_up press read
+;-x------		    ;button_down press read
+;x-------		    ;button_mode state read
+    
     ;States:
     ;s1	display mode	-	current			    SB1=0 SB2=0
     ;s2	display mode	-	log			    SB1=0 SB2=1
@@ -372,7 +383,7 @@ UpdateState.SB1clear.SB2clear	;aka s1
     ;...........................................................................
     ;DOWN BUTTON TEST
     BTFSS DownButtonPending		    ;if pressed transition to s2 
-    GOTO $+6	; not pressed, don't transition
+    GOTO $+3	; not pressed, don't transition
     
     ;button pressed
     BCF DownButtonPending
@@ -384,7 +395,7 @@ UpdateState.SB1clear.SB2clear	;aka s1
     
     ;UP BUTTON TEST
     BTFSS UpButtonPending		    ;if pressed transition to s2 
-    GOTO $+6	; not pressed, don't transition
+    GOTO $+3	; not pressed, don't transition
     
     ;button pressed
     BCF UpButtonPending
@@ -399,7 +410,7 @@ UpdateState.SB1clear.SB2clear	;aka s1
     ;...........................................................................
     ;MODE BUTTON PRESSED
     BTFSS ModeButtonPending		    ;if pressed do next
-    GOTO $+5   ;not pressed, don't transition
+    GOTO $+3   ;not pressed, don't transition
     
     ;button pressed
     BCF ModeButtonPending
@@ -419,7 +430,7 @@ UpdateState.SB1clear.SB2set	;aka s2
     ;...........................................................................
     ;TIMEOUT TEST
     MOVFW State_Timeout
-    BTFSC STATUS,Z
+    BTFSS STATUS,Z
     GOTO $+3			;if not zero skip over
     
     BCF StateBit2		;if zero, goto s1
@@ -430,7 +441,7 @@ UpdateState.SB1clear.SB2set	;aka s2
     ;...........................................................................
     ;TEST UP BUTTON
     BTFSS UpButtonPending		    ;if pressed change log entry viewed
-    GOTO $+5	; not pressed, do nothing
+    GOTO $+2	; not pressed, do nothing
     
     ;button pressed
     BCF UpButtonPending
@@ -440,7 +451,7 @@ UpdateState.SB1clear.SB2set	;aka s2
     
     ;TEST DOWN BUTTON
     BTFSS DownButtonPending		    ;if pressed change log entry viewed 
-    GOTO $+5	; not pressed, do nothing
+    GOTO $+2	; not pressed, do nothing
     
     ;button pressed
     BCF DownButtonPending
@@ -457,7 +468,7 @@ UpdateState.SB1set.SB2clear	;aka s3
     ;	up/down press to change hours log
     ;...........................................................................
     BTFSS UpButtonPending		    ;if pressed inc hours 
-    GOTO $+5	; not pressed, do nothing
+    GOTO $+2	; not pressed, do nothing
     
     BCF UpButtonPending
     ;handle changing of cur hours
@@ -467,7 +478,7 @@ UpdateState.SB1set.SB2clear	;aka s3
     
     
     BTFSS DownButtonPending		    ;if pressed dec hours 
-    GOTO $+5	; not pressed, do nothing
+    GOTO $+2	; not pressed, do nothing
     
     BCF DownButtonPending
     ;handle changing of cur hours
@@ -478,7 +489,7 @@ UpdateState.SB1set.SB2clear	;aka s3
     ;	mode select press to go to s4
     ;...........................................................................
     BTFSS ModeButtonPending		    ;if pressed dec hours 
-    GOTO $+5	; not pressed, do nothing
+    GOTO $+3	; not pressed, do nothing
     
     BCF ModeButtonPending
     ;move to state s4
@@ -506,7 +517,7 @@ UpdateState.SB1set.SB2set	;aka s4
     ;...........................................................................
     
     BTFSS UpButtonPending		    ;if pressed inc minutes 
-    GOTO $+5	; not pressed, do nothing
+    GOTO $+2	; not pressed, do nothing
     
     BCF UpButtonPending
     ;handle changing of cur minutes
@@ -516,7 +527,7 @@ UpdateState.SB1set.SB2set	;aka s4
     
     
     BTFSS DownButtonPending		    ;if pressed dec minutes 
-    GOTO $+5	; not pressed, do nothing
+    GOTO $+2	; not pressed, do nothing
     
     BCF DownButtonPending
     ;handle changing of cur minutes
@@ -531,7 +542,7 @@ UpdateState.SB1set.SB2set	;aka s4
     ;	mode select press to reset and go to s1
     ;...........................................................................
     BTFSS ModeButtonPending
-    GOTO $+3
+    GOTO $+4
     
     BCF ModeButtonPending
     ;do a rtc write
