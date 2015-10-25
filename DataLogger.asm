@@ -67,7 +67,7 @@ CUR_TIME_H  res 1	    ;working hours
 LOG_COUNT   res 1	    ;number of logs we have in memory (63 max)
 RTC_BUFFER res 1	    ;working register to aid getting serial IO  
 LCD_BUFFER res 1	    ;stores whatever we want to put on the LCD right now
-STATE	res 1		    ;state register
+STATE res 1		    ;state register
 ;-------x		    ;button_up state 0=released 1=pressed
 ;------x-		    ;button_down state 0=released 1=pressed
 ;-----x--		    ;button_mode state 0=released 1=pressed
@@ -77,6 +77,9 @@ STATE	res 1		    ;state register
 ;-x------		    ;button_down press read
 ;x-------		    ;button_mode state read
 ;press read indicates a pending read on the button, cleared if no press or if read 
+STATE2 res 1		    ;a second state register
+;-------x		    ;queue LCD update -> if set, LCD needs update 
+ 
 D1  res 1		    ;delay register 1
 D2  res 1		    ;delay resgiter 2
 TD1 res 1		    ;timer delay register 1(for 1 sec)
@@ -163,7 +166,9 @@ TMR0_ISR.1sec		    ;happens once every 1sec
     MOVLW .100		    ;reset count for 1 sec
     MOVWF TD1
     ;------1SEC ISR content start
-    DECF State_Timeout	    ;for state transitioning
+    DECF State_Timeout,F    ;for state transitioning
+    CALL SampleData	    ;get data
+    CALL lcd.print.lastsample	    ;display data
     ;------1SEC ISR content end    
     DECFSZ TD2,F	    ;count down from 60 every 1 sec
     GOTO $+2
@@ -268,7 +273,7 @@ SETUP
 ;=============ADC config================
     ;most code here is based on the datasheet's example code
     BANKSEL ADCON1
-    MOVLW b'0111000'			;configure conversion speed
+    MOVLW b'01110000'			;configure conversion speed
     MOVWF ADCON1
     
 ;==================END=ADC=config======== 
@@ -619,34 +624,36 @@ eeprom.write
 ; sample data - covers data sampling, and display updating if required 
 ;*******************************************************************************
 SampleData
-    
+;   http://www.embeddedrelated.com/showarticle/110.php
+;   useful advice about how to set up multiple channel ADCs
 ;--------------------------------
 ;sample temperature
 ;--------------------------------
+
     BANKSEL ADCON0
     MOVLW b'10101001'			;right justify
     MOVWF ADCON0			;Vdd,AN10, on
-
-    ;6uS delay
-    nop
-    nop
-    nop
-    nop
-    nop
-    nop
+    CALL delay_5_ms
     
     BSF ADCON0,GO	;start conversion
     BTFSC ADCON0,GO	;are we done the conversion?
     GOTO $-1		;try again if not
 
     ;get value in from ADC
+    BANKSEL STATUS
+    BCF STATUS,C
     BANKSEL ADRESL
-    MOVFW ADRESL	
+    INCF ADRESL,F
+    RRF ADRESL,W	;divide by 2 with rounding	
     BANKSEL PORTC
     ;parse value read
+    ;MOVWF TEMP_REG
+    ;BCF STATUS,C
+    ;RRF TEMP_REG,W
+    ;MOVLW .25
     MOVWF TEMP_REG
-    BCF STATUS,C
-    RRF TEMP_REG,W
+    MOVLW .10		    ;calibration offset (ADC read is 10 too high)
+    SUBWF TEMP_REG,W
     MOVWF READ_TEMPERATURE   ;stored for saving to eeprom later (and for displaying)
 
 ;--------------------------------
@@ -659,44 +666,29 @@ SampleData
     ;for such an ADC 1 step=19.53mV, 100 steps=1.953V, this is very small
     ;so instead of scaling 3.3V to 1.953V, we scale 3.3V to 2*1.953V=3.90625V
     ;when parsing our values, we divide the entire number by 2 and get our result.
-    ;thus we scale 3.3V to 3.91 with a gain of 3.91/3.3 = 1.184
-    ;thus Rf=0.184*R1 for a positive gain op-amp
+    ;thus we scale 3.3V to 3.91 with a gain of 3.91/3.3 = 1.188
+    ;thus Rf=0.188*R1 for a positive gain op-amp
+    ; in the end however, the exact value is hardware calibrated
     BANKSEL ADCON0
-    MOVLW b'10101101'			;right justify
+    MOVLW b'00101101'			;left justify
     MOVWF ADCON0			;Vdd,AN11, on
-
-    ;6uS delay
-    nop
-    nop
-    nop
-    nop
-    nop
-    nop
+    CALL delay_5_ms
     
     BSF ADCON0,GO	;start conversion
     BTFSC ADCON0,GO	;are we done the conversion?
     GOTO $-1		;try again if not
     
     ;get values
-    BANKSEL ADRESL
-    MOVFW ADRESL	;get lowbyte from humidity sensor
+    BANKSEL STATUS
+    BCF STATUS,C
+    BANKSEL ADRESH
+    INCF ADRESH,F	;scale is 0->200, so we must half the value
+    RRF ADRESH,W	;divide by 2 with rounding and move into W
     BANKSEL PORTC
     MOVWF READ_HUMIDITY   
-    BANKSEL ADRESH
-    MOVFW ADRESH	;get highbyte from humidity sensor
-    BANKSEL PORTC
-    MOVWF TEMP_REG
-    ;note, we must divide by 2, and then by 4 as we were treating it as a 8 bit reg
-    ;bit it is really a 10bit reg
-    ;shift highbytes into lowbytes (dividing by 4, thus getting 8bit mode)
-    RRF TEMP_REG,F	;LSB TEMP_REG -> Carry
-    RRF READ_HUMIDITY,F	;Carry -> MSB READ_HUMIDITY
-    RRF TEMP_REG,F	;LSB TEMP_REG -> Carry
-    RRF READ_HUMIDITY,F	;Carry -> MSB READ_HUMIDITY
-    ;now divide by 2, as our scale was based on 0->200 not 0->100
-    BCF STATUS,C	;Clear carry
-    ;RRF READ_HUMIDITY,F	;Divide by 2
-    
+
+
+
 ;--------------------------------
 ;sample supply level
 ;--------------------------------
@@ -709,13 +701,7 @@ SampleData
     MOVLW b'00110101'			;left justify
     MOVWF ADCON0			;Vdd,0.6V constant, on
 
-    ;6uS delay
-    nop
-    nop
-    nop
-    nop
-    nop
-    nop
+    CALL delay_5_ms
     
     BSF ADCON0,GO	;start conversion
     BTFSC ADCON0,GO	;are we done the conversion?
@@ -752,7 +738,7 @@ SampleData
     DECF READ_POWERSUPPLY,F
     ;this is the 10's digit, the 1's digit will always be 0
     
-    BCF ADCON0,0    ;disable ADC until next sample
+    ;BCF ADCON0,0    ;disable ADC until next sample
 ;--------------------------------
 ;obtain time
 ;--------------------------------    
@@ -1297,8 +1283,13 @@ Div10Finished
 ;-------------------------------------------------------------------------------    
     
 ;*******************************************************************************
-; Delay 10 ms -> 10ms delay 
+; Delays 
 ;*******************************************************************************
+delay_5_ms
+    MOVLW .20
+    MOVWF D2
+    GOTO $+3
+    
 delay_10_ms
     ;goto=2 cyles, decfsz=1 cycle, if zero=2 cycles
     MOVLW .40
@@ -1389,7 +1380,7 @@ lcd.write
 ;	combines all LCD write functions into a formatted print
 ;*******************************************************************************
 lcd.print.lastsample
-    CALL lcd.clear	;sends clear command
+    CALL lcd.home	;sends clear command
     
     MOVFW READ_TEMPERATURE
     CALL BINtoLCD	;outputs=BCD_H and BCD_L
@@ -1512,6 +1503,12 @@ lcd.newline
     MOVLW b'11000000'	;1,addr=100 0000 (40h)
     MOVWF LCD_BUFFER
     CALL lcd.command	;sends newline command (set address=40h)
+    RETURN
+    
+lcd.home
+    MOVLW b'10000000'	;1,addr=000 0000 (00h)
+    MOVWF LCD_BUFFER
+    CALL lcd.command	;sends home command (set address=00h)
     RETURN
     
 ;###END#OF#CALL###
