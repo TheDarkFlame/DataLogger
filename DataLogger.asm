@@ -63,6 +63,7 @@ CUR_TEMPERATURE res 1	    ;working temperature
 CUR_HUMIDITY	res 1	    ;working humidity
 CUR_TIME_L  res 1	    ;working minutes
 CUR_TIME_H  res 1	    ;working hours
+CUR_LOG_ENTRY res 1	    ;stores which log entry we are at (of the 63 max)
   
 LOG_COUNT   res 1	    ;number of logs we have in memory (63 max)
 RTC_BUFFER res 1	    ;working register to aid getting serial IO  
@@ -293,8 +294,10 @@ SETUP
     MOVLW .217				; configured for 10ms delay (256=65ms according to stopwatch)
     MOVWF TMR0
     
+    BANKSEL LOG_COUNT
+    CLRF LOG_COUNT
     
-    
+    BANKSEL TD1
     ;set all ISR values to 1 so we enter the highest ISR on first interrupt
     MOVLW .1
     MOVWF TD1	;set delay1=100x10ms	(so 1 second intervals)
@@ -388,13 +391,19 @@ UpdateState.SB1clear.SB2clear	;aka s1
     ;...........................................................................
     ;DOWN BUTTON TEST
     BTFSS DownButtonPending		    ;if pressed transition to s2 
-    GOTO $+3	; not pressed, don't transition
+    GOTO $+6	; not pressed, don't transition
     
     ;button pressed
-    BCF DownButtonPending
-    ;handle changing of read address
-    ;
-    ;
+    BCF DownButtonPending		    ;register that button press was read
+    
+    MOVFW READ_EEADR			    ;the address we will store next sample to
+    MOVWF CUR_EEADR			    ;set our new display value as sample value
+    
+    MOVFW LOG_COUNT			    ;set our mem read value = latest log,
+    MOVWF CUR_LOG_ENTRY			    ; as from this state we always start at latest log
+    
+    CALL CountAdrDown
+
     BSF StateBit2			    ;move to s2
     
     
@@ -403,10 +412,9 @@ UpdateState.SB1clear.SB2clear	;aka s1
     GOTO $+3	; not pressed, don't transition
     
     ;button pressed
-    BCF UpButtonPending
-    ;handle changing of read address
-    ;
-    ;
+    BCF UpButtonPending			    ;register that button press was read
+    CALL CountAdrUp			    ;count up 1 number
+
     BSF StateBit2			    ;move to s2
     
     
@@ -418,7 +426,7 @@ UpdateState.SB1clear.SB2clear	;aka s1
     GOTO $+3   ;not pressed, don't transition
     
     ;button pressed
-    BCF ModeButtonPending
+    BCF ModeButtonPending		    ;register that button is pressed
     BSF StateBit1			    ;goto s3
     
     RETURN
@@ -446,20 +454,22 @@ UpdateState.SB1clear.SB2set	;aka s2
     ;...........................................................................
     ;TEST UP BUTTON
     BTFSS UpButtonPending		    ;if pressed change log entry viewed
-    GOTO $+2	; not pressed, do nothing
+    GOTO $+3	; not pressed, do nothing
     
     ;button pressed
     BCF UpButtonPending
+    CALL CountAdrUp
     ;handle changing of read address
     ;
     ;
     
     ;TEST DOWN BUTTON
     BTFSS DownButtonPending		    ;if pressed change log entry viewed 
-    GOTO $+2	; not pressed, do nothing
+    GOTO $+3	; not pressed, do nothing
     
     ;button pressed
     BCF DownButtonPending
+    CALL CountAdrDown
     ;handle changing of read address
     ;
     ;
@@ -473,9 +483,10 @@ UpdateState.SB1set.SB2clear	;aka s3
     ;	up/down press to change hours log
     ;...........................................................................
     BTFSS UpButtonPending		    ;if pressed inc hours 
-    GOTO $+2	; not pressed, do nothing
+    GOTO $+3	; not pressed, do nothing
     
     BCF UpButtonPending
+    CALL CountHourUp
     ;handle changing of cur hours
     ;
     ;
@@ -483,9 +494,10 @@ UpdateState.SB1set.SB2clear	;aka s3
     
     
     BTFSS DownButtonPending		    ;if pressed dec hours 
-    GOTO $+2	; not pressed, do nothing
+    GOTO $+3	; not pressed, do nothing
     
     BCF DownButtonPending
+    CALL CountHourDown
     ;handle changing of cur hours
     ;
     ;
@@ -522,9 +534,10 @@ UpdateState.SB1set.SB2set	;aka s4
     ;...........................................................................
     
     BTFSS UpButtonPending		    ;if pressed inc minutes 
-    GOTO $+2	; not pressed, do nothing
+    GOTO $+3	; not pressed, do nothing
     
     BCF UpButtonPending
+    CALL CountMinuteUp
     ;handle changing of cur minutes
     ;
     ;
@@ -532,9 +545,10 @@ UpdateState.SB1set.SB2set	;aka s4
     
     
     BTFSS DownButtonPending		    ;if pressed dec minutes 
-    GOTO $+2	; not pressed, do nothing
+    GOTO $+3	; not pressed, do nothing
     
     BCF DownButtonPending
+    CALL CountMinuteDown
     ;handle changing of cur minutes
     ;
     ;
@@ -570,10 +584,152 @@ UpdateState.SB1set.SB2set	;aka s4
 
 ;###END#OF#CALL###
     
+    ;functions for each of the above states' actions
+;-------------------------------------------------------------------------------    
+CountAdrDown			;decrease the CUR_EEADR memory block, wrapping as needed
+    DECFSZ CUR_LOG_ENTRY,F	;move one entry backward
+    GOTO $+8			;if not zero, skip the next 7 lines
+    
+;if CUR_LOG_ENTRY=0
+    MOVFW LOG_COUNT
+    MOVWF CUR_LOG_ENTRY		;if equal zero(invalid) then wrap around to max (LOG_COUNT)
+    
+    ;now we must ***increase*** eeadr by 4*LOG_COUNT, as this correlates with an equal movement of CUR_LOG_ENTRY
+    ;eg, if CUR_LOG_ENTRY was 1, and goes to 4, and CUR_EEADR was 52, it should now move up by (4-1)*4=12 entries to 64.
+    ;this is a semi-dynamic array type structure.
+    RLF LOG_COUNT,W
+    MOVWF TEMP_REG
+    RLF TEMP_REG,W		;multiply LOG_COUNT by 4
+    ADDWF CUR_EEADR,F		;add LOG_COUNT*4 to CUR_EEADR
+    GOTO CountAdrDown.Validate
+    
+;if CUR_LOG_ENTRY!=0
+    DECF CUR_LOG_ENTRY,F
+    DECF CUR_LOG_ENTRY,F
+    DECF CUR_LOG_ENTRY,F
+    DECF CUR_LOG_ENTRY,F
+    
+    MOVLW .252
+    SUBWF CUR_EEADR,W
+    BTFSC STATUS,Z  ;if Z=set (READ_EEADR=252) then set READ_EEADR to 248 (skip invalid region)
+    MOVLW .248
+    MOVWF CUR_EEADR
+    ;note here we move down past the invalid region to .248, treating it as if it were not there
+    RETURN
+    
+CountAdrDown.Validate		;checks that the CUR_EEADR is valid, and moves it to a valid range if invalid 
+    MOVLW .252
+    SUBWF CUR_EEADR,W
+    BTFSC STATUS,Z  ;if Z=set (READ_EEADR=252) then set READ_EEADR to 0, (skip the invalid region)
+    CLRF CUR_EEADR  ;set READ_EEADR=0
+    ;note here, since we are moving up back to the top of our list, we move up over the invalid region, to 0
+    RETURN
+    
+;-------------------------------------------------------------------------------    
+
+CountAdrUp			;increase the CUR_EEADR memory block, wrapping as needed
+    INCF CUR_LOG_ENTRY,F	;move one entry forward
+    INCF LOG_COUNT,W		;max value=LOG_COUNT+1
+    SUBWF CUR_LOG_ENTRY,W	; if W>f C=0
+    BTFSS STATUS,C		;if f>=LOG_COUNT+1 C=1 so skip the goto if CUR_LOG_ENTRY==LOG_COUNT+1
+    GOTO $+8			;if not LOG_COUNT (C=0), skip the next 7 lines
+    
+;if CUR_LOG_ENTRY=LOG_COUNT+1
+    CLRF CUR_LOG_ENTRY		;if equal max (LOG_COUNT+1), wrap around to 1
+    INCF CUR_LOG_ENTRY		;set current entry to 1
+    
+    ;now we must ***decrease*** eeadr by 4*LOG_COUNT, as this correlates with an equal movement of CUR_LOG_ENTRY
+    ;eg, if CUR_LOG_ENTRY was 4, and goes to 1, and CUR_EEADR was 52, it should now move up by (4-1)*4 entries to 40.
+    ;this is a semi-dynamic array type structure.
+    RLF LOG_COUNT,W
+    MOVWF TEMP_REG
+    RLF TEMP_REG,W		;multiply LOG_COUNT by 4
+    SUBWF CUR_EEADR,F		;subtract LOG_COUNT*4 from CUR_EEADR
+    GOTO CountAdrUp.Validate
+    
+;if CUR_LOG_ENTRY!=LOG_COUNT
+    INCF CUR_LOG_ENTRY,F
+    INCF CUR_LOG_ENTRY,F
+    INCF CUR_LOG_ENTRY,F
+    INCF CUR_LOG_ENTRY,F
+        
+    MOVLW .252
+    SUBWF CUR_EEADR,W
+    BTFSC STATUS,Z  ;if Z=set (READ_EEADR=252) then set READ_EEADR to 0, (skip the invalid region)
+    CLRF CUR_EEADR  ;set READ_EEADR=0
+    ;note here, since we are moving up back to the top of our list, we move up over the invalid region, to 0
+    RETURN
+    
+CountAdrUp.Validate		;checks that the CUR_EEADR is valid, and moves it to a valid range if invalid 
+    MOVLW .252
+    SUBWF CUR_EEADR,W
+    BTFSC STATUS,Z  ;if Z=set (READ_EEADR=252) then set READ_EEADR to 248 (skip invalid region)
+    MOVLW .248
+    MOVWF CUR_EEADR
+    ;note here we move down past the invalid region to .248, treating it as if it were not there
+    RETURN
+
+;-------------------------------------------------------------------------------    
+        
+CountHourDown			;count CUR_TIME_H down
+    MOVLW .23			;handle the case where hours<0
+    DECFSZ CUR_TIME_H,F		;set value to 23
+    GOTO $+2
+    MOVWF CUR_TIME_H
+    
+    RETURN
+    
+;-------------------------------------------------------------------------------    
+
+CountHourUp			;count CUR_TIME_H up
+    INCF CUR_TIME_H,F		;inc hours
+    
+    MOVLW .24			;if hours =24, set hours =0
+    SUBLW CUR_TIME_H,W
+    BTFSC STATUS,Z
+    CLRF CUR_TIME_H
+    
+    RETURN
+    
+;-------------------------------------------------------------------------------    
+
+CountMinuteDown			;count CUR_TIME_L down
+    MOVLW .59			;handle the case where hours<0
+    DECFSZ CUR_TIME_L,F		;set value to 23
+    GOTO $+2
+    MOVWF CUR_TIME_L
+    
+    RETURN
+    
+;-------------------------------------------------------------------------------    
+
+CountMinuteUp			;count CUR_TIME_L up
+    INCF CUR_TIME_L,F		;inc minutes
+    
+    MOVLW .60			;if minutes =60, set minutes =0
+    SUBLW CUR_TIME_L,W
+    BTFSC STATUS,Z
+    CLRF CUR_TIME_L
+    
+    RETURN
+    
+;-------------------------------------------------------------------------------
+    
+;###END#OF#CALL###
+ 
+    
 ;*******************************************************************************
 ; EEPROM.write 
 ;*******************************************************************************
 eeprom.write
+    ;increment log count, if f=63, do not increase
+    INCF LOG_COUNT,F
+    MOVLW .64		;if W>f, C=0
+    SUBWF LOG_COUNT,W
+    BTFSC STATUS,C
+    DECF LOG_COUNT,F	;if not (0.64>f), then decrement f (so keep f=.63)
+    
+    
     BANKSEL INTCON
     BCF INTCON, GIE ;disable interrupts
     ;EEDATA structure:
