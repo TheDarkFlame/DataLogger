@@ -68,6 +68,7 @@ CUR_LOG_ENTRY res 1	    ;stores which log entry we are at (of the 63 max)
 LOG_COUNT   res 1	    ;number of logs we have in memory (63 max)
 RTC_BUFFER res 1	    ;working register to aid getting serial IO  
 LCD_BUFFER res 1	    ;stores whatever we want to put on the LCD right now
+LCD_POSITION res 1	    ;for writing to a specific LCD position defined in code
 STATE res 1		    ;state register
 ;-------x		    ;button_up state 0=released 1=pressed
 ;------x-		    ;button_down state 0=released 1=pressed
@@ -89,6 +90,7 @@ TD3 res 1		    ;timer delay register 3(for 5 min)
 BCD_H res 1		    ;register used for bin->BCD (high byte)
 BCD_L res 1		    ;register used for bin->BCD (low byte)
 TEMP_REG res 1		    ;temporary register
+TEMP_REG2 res 1		    ;temporary register
 CHAR_L res 1		    ;stores lowbyte ascii characters for write functions
 CHAR_H res 1		    ;stores highbyte ascii characters for write functions
 Button_Up_Counter res 1	    ;used for tracking up button state
@@ -306,7 +308,7 @@ SETUP
     MOVLW .1
     MOVWF TD3	;set delay3=5x1min	(so 5 minute intervals)
     
-    ;CALL lcd.print.lastsample
+    CALL lcd.clear
     BSF INTCON, GIE			;enable global interrupts
 
     
@@ -390,11 +392,13 @@ UpdateState.SB1clear.SB2clear	;aka s1
     ;up/down press to move to s2
     ;...........................................................................
     ;DOWN BUTTON TEST
+
     BTFSS DownButtonPending		    ;if pressed transition to s2 
-    GOTO $+6	; not pressed, don't transition
+    GOTO $+8	; not pressed, don't transition
     
     ;button pressed
     BCF DownButtonPending		    ;register that button press was read
+    
     
     MOVFW READ_EEADR			    ;the address we will store next sample to
     MOVWF CUR_EEADR			    ;set our new display value as sample value
@@ -409,12 +413,13 @@ UpdateState.SB1clear.SB2clear	;aka s1
     
     ;UP BUTTON TEST
     BTFSS UpButtonPending		    ;if pressed transition to s2 
-    GOTO $+3	; not pressed, don't transition
+    GOTO $+4	; not pressed, don't transition
     
     ;button pressed
     BCF UpButtonPending			    ;register that button press was read
     CALL CountAdrUp			    ;count up 1 number
-
+    
+    
     BSF StateBit2			    ;move to s2
     
     
@@ -441,6 +446,7 @@ UpdateState.SB1clear.SB2set	;aka s2
     ;...........................................................................
     ;	timeout for transition back to current
     ;...........................................................................
+    
     ;TIMEOUT TEST
     MOVFW State_Timeout
     BTFSS STATUS,Z
@@ -685,7 +691,7 @@ CountHourUp			;count CUR_TIME_H up
     INCF CUR_TIME_H,F		;inc hours
     
     MOVLW .24			;if hours =24, set hours =0
-    SUBLW CUR_TIME_H,W
+    SUBLW CUR_TIME_H
     BTFSC STATUS,Z
     CLRF CUR_TIME_H
     
@@ -707,7 +713,7 @@ CountMinuteUp			;count CUR_TIME_L up
     INCF CUR_TIME_L,F		;inc minutes
     
     MOVLW .60			;if minutes =60, set minutes =0
-    SUBLW CUR_TIME_L,W
+    SUBLW CUR_TIME_L
     BTFSC STATUS,Z
     CLRF CUR_TIME_L
     
@@ -912,41 +918,12 @@ SampleData
 ;*******************************************************************************
 ButtonUp.OnPress
     BSF UpButtonPending
-    
-    CALL lcd.clear
-    
-;    MOVLW LOW StudentNumber
-;    MOVWF Input1
-;    MOVLW HIGH StudentNumber
-;    MOVWF Input2
-;    CALL lcd.printString
-;    CALL lcd.newline
-;    MOVLW LOW StudentName
-;    MOVWF Input1
-;    MOVLW HIGH StudentName
-;    MOVWF Input2
-;    CALL lcd.printString
-    MOVLW 30
-    MOVWF CUR_TIME_L
-    MOVLW 10
-    MOVWF CUR_TIME_H
-    CALL RTC.write
+
     RETURN
     
 ButtonDown.OnPress
     BSF DownButtonPending
-    
-    
-    CALL RTC.read
-    
-    MOVFW READ_TIME_H
-    MOVWF LCD_BUFFER
-    CALL lcd.data
-    
-    MOVFW READ_TIME_L
-    MOVWF LCD_BUFFER
-    CALL lcd.data
-    
+   
     RETURN
     
 ButtonMode.OnPress
@@ -1473,8 +1450,19 @@ BINtoLCD
     ADDWF BCD_L,F
     ADDWF BCD_H,F
     
+    RETURN    
+;###END#OF#CALL###
+    
+    
+;*******************************************************************************
+;	Single digit binary -> ascii
+;*******************************************************************************
+BintoCHAR    
+    MOVLW b'00110000'
+    ADDWF LCD_BUFFER,F
     RETURN
 ;###END#OF#CALL###
+    
     
 ;*******************************************************************************
 ; LCD write data - writes data in LCD_BUFFER to the LCD 
@@ -1666,7 +1654,21 @@ lcd.home
     MOVWF LCD_BUFFER
     CALL lcd.command	;sends home command (set address=00h)
     RETURN
+
+lcd.writepos	;writes LCD_BUFFER to LCD_POSITION
+
+    MOVFW LCD_BUFFER	;store character for later
+    MOVWF TEMP_REG2
     
+    MOVFW LCD_POSITION
+    MOVWF LCD_BUFFER
+    BSF LCD_BUFFER,7	;1,LCD_POSITION
+    CALL lcd.command	;sends location command (set address=LCD_POSITION)
+    
+    MOVFW TEMP_REG2	;restore character from earlier
+    MOVWF LCD_BUFFER
+    CALL lcd.data	;send data contained in LCD_BUFFER
+    RETURN    
 ;###END#OF#CALL###
 
     
