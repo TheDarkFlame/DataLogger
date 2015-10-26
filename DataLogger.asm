@@ -35,7 +35,7 @@
 #define LCD_E	7		
 #define Button_Down PORTA,0
 #define Button_Up PORTA,1
-#define Button_Mode PORTB,7
+#define Button_Mode PORTA,2
 #define Button_Down.State STATE,0
 #define Button_Up.State STATE,1
 #define Button_Mode.State STATE, 2
@@ -267,6 +267,7 @@ SETUP
     BANKSEL TRISA
     BSF TRISA,0	    ;button1=input
     BSF TRISA,1	    ;button2=input
+    BSF TRISA,2	    ;button3=input
     
     BANKSEL TRISB
     BSF TRISB,4	    ;temperature sensor=input
@@ -919,15 +920,63 @@ SampleData
 ButtonUp.OnPress
     BSF UpButtonPending
 
+    MOVLW 'U'		;debugging, we are in state 1
+    MOVWF LCD_BUFFER
+    MOVLW 0x0D
+    MOVWF LCD_POSITION
+    CALL lcd.writepos
+    
     RETURN
     
 ButtonDown.OnPress
     BSF DownButtonPending
    
+    MOVLW 'D'		;debugging, we are in state 1
+    MOVWF LCD_BUFFER
+    MOVLW 0x0E
+    MOVWF LCD_POSITION
+    CALL lcd.writepos
+    
     RETURN
     
 ButtonMode.OnPress
     BSF ModeButtonPending
+    
+    MOVLW 'M'		;debugging, we are in state 1
+    MOVWF LCD_BUFFER
+    MOVLW 0x0F
+    MOVWF LCD_POSITION
+    CALL lcd.writepos
+    
+    RETURN
+
+ButtonUp.OnRelease
+
+    MOVLW ' '		;debugging, we are in state 1
+    MOVWF LCD_BUFFER
+    MOVLW 0x0D
+    MOVWF LCD_POSITION
+    CALL lcd.writepos
+    
+    RETURN
+    
+ButtonDown.OnRelease
+   
+    MOVLW ' '		;debugging, we are in state 1
+    MOVWF LCD_BUFFER
+    MOVLW 0x0E
+    MOVWF LCD_POSITION
+    CALL lcd.writepos
+    
+    RETURN
+    
+    MOVLW ' '		;debugging, we are in state 1
+    MOVWF LCD_BUFFER
+    MOVLW 0x0F
+    MOVWF LCD_POSITION
+    CALL lcd.writepos
+    
+ButtonMode.OnRelease
     
     RETURN
 ;###END#OF#CALL###
@@ -997,6 +1046,7 @@ Poll_Button_Up.PressedState.Released
     
     CLRF Button_Up_Counter	    ;clear the cur_num
     BCF Button_Up.State	    	;change status to Released (0)
+    CALL ButtonUp.OnRelease
     GOTO Poll_Button_Up.End
     
     
@@ -1073,6 +1123,7 @@ Poll_Button_Down.PressedState.Released
     
     CLRF Button_Down_Counter	;clear the cur_num
     BCF Button_Down.State	    	;change status to Released (0)
+    CALL ButtonDown.OnRelease
     GOTO Poll_Button_Down.End
     
     
@@ -1149,6 +1200,7 @@ Poll_Button_Mode.PressedState.Released
     
     CLRF Button_Mode_Counter	    ;clear the cur_num
     BCF Button_Mode.State	    	;change status to Released (0)
+    CALL ButtonMode.OnRelease
     GOTO Poll_Button_Mode.End
     
     
