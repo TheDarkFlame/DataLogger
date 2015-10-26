@@ -48,6 +48,7 @@
 #define DownButtonPending STATE,5
 #define UpButtonPending STATE,6
 #define ModeButtonPending STATE,7
+#define ClockRedrawFlag STATE2,0
  
 ;REGISTERS
 variables udata
@@ -80,8 +81,10 @@ STATE res 1		    ;state register
 ;x-------		    ;button_mode state read
 ;press read indicates a pending read on the button, cleared if no press or if read 
 STATE2 res 1		    ;a second state register
-;-------x		    ;queue LCD update -> if set, LCD needs update 
- 
+;-------x		    ;redraw clock on LCD, if set clock needs a redraw
+;------x-
+CLOCK_MINUTES res 1	    ;system timer (minutes)
+CLOCK_HOURS res 1	    ;system timer (hours)
 D1  res 1		    ;delay register 1
 D2  res 1		    ;delay resgiter 2
 TD1 res 1		    ;timer delay register 1(for 1 sec)
@@ -182,7 +185,7 @@ TMR0_ISR.1min		    ;happens every 1 min
     MOVLW .60		    ;reset count for 1 min
     MOVWF TD2
     ;------1MIN ISR content start
-    
+    CALL UpdateClock
     ;------1MIN ISR content end
     DECFSZ TD3,F	    ;count down from 5 every 1 min
     GOTO $+2
@@ -253,14 +256,15 @@ SETUP
     BCF PORTC,LCD_E
 
     CALL delay_10_ms
-    MOVLW b'00101111'		    ;4bit, 2 lines,5x11dots
+    MOVLW b'00001111'		    ;00001DCB Display=on Blinking=on Cursor=on
     MOVWF LCD_BUFFER		    ;move command into buffer
     CALL lcd.command		    ;send command
     
     CALL delay_10_ms
-    MOVLW b'00001111'		    ;00001DCB Display=on Blinking=on Cursor=on
+    MOVLW b'00101111'		    ;4bit, 2 lines,5x11dots
     MOVWF LCD_BUFFER		    ;move command into buffer
     CALL lcd.command		    ;send command
+    
 ;-------------------------------------------------------------------------------
 
 ;Configure ports for other peripherals
@@ -299,6 +303,11 @@ SETUP
     
     BANKSEL LOG_COUNT
     CLRF LOG_COUNT
+    CLRF CLOCK_HOURS
+    
+    CLRF CLOCK_MINUTES	
+    COMF CLOCK_MINUTES,F	;set such that the first interrupt will set it to zero
+    
     
     BANKSEL TD1
     ;set all ISR values to 1 so we enter the highest ISR on first interrupt
@@ -317,6 +326,15 @@ SETUP
     
     
 START
+    
+    BTFSS ClockRedrawFlag	;if set then redraw clock
+    GOTO $+5			;if not set,skip redraw
+    
+	MOVLW 0x05
+	MOVWF LCD_POSITION
+	CALL lcd.print.clock
+	BCF ClockRedrawFlag	;clear the flag
+    
     GOTO START
 
 
@@ -643,7 +661,7 @@ CountAdrUp			;increase the CUR_EEADR memory block, wrapping as needed
     
 ;if CUR_LOG_ENTRY=LOG_COUNT+1
     CLRF CUR_LOG_ENTRY		;if equal max (LOG_COUNT+1), wrap around to 1
-    INCF CUR_LOG_ENTRY		;set current entry to 1
+    INCF CUR_LOG_ENTRY,F		;set current entry to 1
     
     ;now we must ***decrease*** eeadr by 4*LOG_COUNT, as this correlates with an equal movement of CUR_LOG_ENTRY
     ;eg, if CUR_LOG_ENTRY was 4, and goes to 1, and CUR_EEADR was 52, it should now move up by (4-1)*4 entries to 40.
@@ -1215,6 +1233,28 @@ Poll_Button_Mode.End
     
 ;###END#OF#CALL###    
     
+    
+;*******************************************************************************
+;	Update Clock - keeps the clock on track of the time since startup
+;*******************************************************************************
+UpdateClock
+    INCF CLOCK_MINUTES,F
+
+    MOVLW .60		    ;check for overflow of minutes
+    SUBWF CLOCK_MINUTES,W
+    BTFSS STATUS,Z
+    GOTO $+3		    ;if not zero, skip the following lines
+    
+    CLRF CLOCK_MINUTES
+    INCF CLOCK_HOURS,F
+    
+    BSF ClockRedrawFlag	    ;clock needs a redraw
+    
+    RETURN
+    
+;###END#OF#CALL###    
+    
+
 ;*******************************************************************************
 ;	writes values to the RTC
 ;writes CUR_TIME_H, CUR_TIME_L to RTC
@@ -1614,8 +1654,43 @@ lcd.print.lastsample
     RETURN
 ;###END#OF#CALL###
     
+;*******************************************************************************
+;	function to redraw clock at LCD_POSITION (5 char long)
+;*******************************************************************************
+lcd.print.clock   
+    CALL lcd.setpos	;sets LCD to LCD_POSITION
     
+    MOVFW CLOCK_HOURS 
+    CALL BINtoLCD	;gets clock hours as 2 ascii characters
     
+    MOVFW BCD_H
+    MOVWF LCD_BUFFER	;outputs 10's hours
+    CALL lcd.data
+    
+    MOVFW BCD_L
+    MOVWF LCD_BUFFER	;outputs 1's hours
+    CALL lcd.data
+    
+    MOVLW ':'
+    MOVWF LCD_BUFFER	;outputs the divider symbol
+    CALL lcd.data
+    
+    MOVFW CLOCK_MINUTES 
+    CALL BINtoLCD	;gets clock minutes as 2 ascii characters
+    
+    MOVFW BCD_H
+    MOVWF LCD_BUFFER	;outputs 10's minutes
+    CALL lcd.data
+    
+    MOVFW BCD_L
+    MOVWF LCD_BUFFER	;outputs 1's minutes
+    CALL lcd.data
+    
+
+    
+    RETURN
+    
+;###END#OF#CALL###
     
 ;*******************************************************************************
 ;	a generic LCD print function that will print any ascii array
@@ -1721,6 +1796,13 @@ lcd.writepos	;writes LCD_BUFFER to LCD_POSITION
     MOVWF LCD_BUFFER
     CALL lcd.data	;send data contained in LCD_BUFFER
     RETURN    
+    
+lcd.setpos		;sets the LCD to LCD_POSITION
+    MOVFW LCD_POSITION
+    MOVWF LCD_BUFFER
+    BSF LCD_BUFFER,7	;1,LCD_POSITION
+    CALL lcd.command	;sends location command (set address=LCD_POSITION)
+    RETURN
 ;###END#OF#CALL###
 
     
