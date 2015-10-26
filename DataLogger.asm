@@ -1613,7 +1613,7 @@ lcd.printString.loop
     GOTO lcd.printString.loop 
     
 lcd.printString.end
-    BCF INTCON,GIE	;re-enable interrupts
+    BSF INTCON,GIE	;re-enable interrupts
     RETURN
     
 ;*******************************************************************************
