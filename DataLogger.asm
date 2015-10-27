@@ -41,15 +41,17 @@
 #define RTC_IO PORTC,5
 #define RTC_SCLK PORTC,0
 #define StateBit1 STATE,3
-;#define StateBit2 STATE,4
+#define StateBit2 STATE,4
 #define TimeoutDelay .3
-#define DownButtonPending STATE,5
-#define UpButtonPending STATE,6
+#define DownButtonPending STATE,6
+#define UpButtonPending STATE,5
 #define ClockRedrawFlag STATE2,0
 #define ResampleFlag STATE2,1
 #define LogDataFlag STATE2,2
 #define EepromWrapped STATE2,3 
-;REGISTERS
+#define StateRefreshLCD STATE2,4
+ 
+ ;REGISTERS
 variables udata
 WRITE_EEADR   res 1	    ;stores value of latest written EEADR + 1 (for cycling through EEDAT)
 READ_TEMPERATURE res 1	    ;stores last temperature we read from the sensor
@@ -58,7 +60,7 @@ READ_TIME_L  res 1	    ;stores minutes we last read from the RTC
 READ_TIME_H  res 1	    ;stores hours we last read from the RTC
 READ_POWERSUPPLY res 1	    ;last read power level of the device
   
-CUR_EEADR  res 1	    ;working eeadr (eg for displaying)
+LOGREAD_EEADR  res 1	    ;working eeadr (eg for displaying)
 CUR_TEMPERATURE res 1	    ;working temperature
 CUR_HUMIDITY	res 1	    ;working humidity
 CUR_TIME_L  res 1	    ;working minutes
@@ -84,6 +86,7 @@ STATE2 res 1		    ;a second state register
 ;------x-		    ;take sample of the inputs (humidity temp, etc) and update lcd
 ;-----x--		    ;store the current samples in eeprom
 ;----x---		    ;eeprom wrapped around - set if eeprom has wrapped at least once
+;---x----		    ;state updated, refresh LCD flag
 CLOCK_MINUTES res 1	    ;system timer (minutes)
 CLOCK_HOURS res 1	    ;system timer (hours)
 D1  res 1		    ;delay register 1
@@ -429,36 +432,35 @@ UpdateState.SB1clear.SB2clear	;aka s1
     ;...........................................................................
     ;up/down press to move to s2
     ;...........................................................................
-    ;DOWN BUTTON TEST
+;DOWN BUTTON TEST
 
     BTFSS DownButtonPending		    ;if pressed transition to s2 
-    GOTO $+8	; not pressed, don't transition
+    GOTO $+7	; not pressed, don't transition
     
     ;button pressed
     BCF DownButtonPending		    ;register that button press was read
     
-    
     MOVFW WRITE_EEADR			    ;the address we will store next sample to
-    MOVWF CUR_EEADR			    ;set our new display value as sample value
-    
-    MOVFW LOG_COUNT			    ;set our mem read value = latest log,
-    MOVWF CUR_LOG_ENTRY			    ; as from this state we always start at latest log
-    
-    CALL CountAdrDown
+    MOVWF LOGREAD_EEADR			    ;set our new display value as sample value
+    CALL CountAdrDown			    ;count our address down, dealing with wrapping   
 
     BSF StateBit2			    ;move to s2
+    BSF StateRefreshLCD			    ;flag lcd to update accoring to new state
     
-    
-    ;UP BUTTON TEST
+;UP BUTTON TEST
     BTFSS UpButtonPending		    ;if pressed transition to s2 
-    GOTO $+4	; not pressed, don't transition
+    GOTO $+7	; not pressed, don't transition
     
     ;button pressed
     BCF UpButtonPending			    ;register that button press was read
-    CALL CountAdrUp			    ;count up 1 number
+    
+    MOVFW WRITE_EEADR			    ;the address we will store next sample to
+    MOVWF LOGREAD_EEADR			    ;set our new display value as sample value
+    CALL CountAdrUp			    ;count our address up, dealing with wrapping
     
     
     BSF StateBit2			    ;move to s2
+    BSF StateRefreshLCD			    ;flag lcd to update accoring to new state
     
     
 ;    ;...........................................................................
@@ -488,9 +490,10 @@ UpdateState.SB1clear.SB2set	;aka s2
     ;TIMEOUT TEST
     MOVFW State_Timeout
     BTFSS STATUS,Z
-    GOTO $+3			;if not zero skip over
+    GOTO $+4			;if not zero skip over
     
     BCF StateBit2		;if zero, goto s1
+    BSF StateRefreshLCD		;flag lcd to update accoring to new state
     RETURN			;no need to check anything more
     
     ;...........................................................................
@@ -521,7 +524,7 @@ UpdateState.SB1clear.SB2set	;aka s2
     RETURN	
     
 ;-------------------------------------------------------------------------------    
-UpdateState.SB1set.SB2clear	;aka s3
+UpdateState.SB1set.SB2clear	;aka s3 [not currently active]
     ;s3 tasks
     ;...........................................................................
     ;	up/down press to change hours log
@@ -571,7 +574,7 @@ UpdateState.SB1set.SB2clear	;aka s3
     RETURN
     
 ;-------------------------------------------------------------------------------    
-UpdateState.SB1set.SB2set	;aka s4
+UpdateState.SB1set.SB2set	;aka s4 [not currently active]
     ;s4 tasks:
     ;...........................................................................
     ;	up/down press for changing minutes
@@ -630,91 +633,57 @@ UpdateState.SB1set.SB2set	;aka s4
     
     ;functions for each of the above states' actions
 ;-------------------------------------------------------------------------------    
-CountAdrDown			;decrease the CUR_EEADR memory block, wrapping as needed
-    DECFSZ CUR_LOG_ENTRY,F	;move one entry backward
-    GOTO $+8			;if not zero, skip the next 7 lines
+CountAdrDown			;decrease the LOGREAD_EEADR memory block, wrapping as needed
+;this function will decrement the logread_eeadr by 4, if this value is negative,
+;the value will be wrapped around (the number is always represented as modulo (write_eeadr)
+;as such when the value is negative, we simply add to it write_eeadr to loop it around
+    DECF LOGREAD_EEADR,F
+    DECF LOGREAD_EEADR,F
+    DECF LOGREAD_EEADR,F
+    DECF LOGREAD_EEADR,F
+    ;if we have wrapped (all memory addresses are filled, then the address is valid)
+    BTFSC EepromWrapped
+	RETURN		;if wrapped, then return
+	
+    ;test if our number is larger than WRITE_EEADR, if it is it must be added to WRITE_EEADR
+    MOVFW LOGREAD_EEADR
+    SUBWF WRITE_EEADR,W	    ;if W>f, C=0
+    BTFSC STATUS,C
     
-;if CUR_LOG_ENTRY=0
-    MOVFW LOG_COUNT
-    MOVWF CUR_LOG_ENTRY		;if equal zero(invalid) then wrap around to max (LOG_COUNT)
+    GOTO $+3
+    ;here we note that LOGREAD_EEADR > WRITE_EEADR, so it has wrapped around,
+    ;thus we set LOGREAD_EEADR to WRITE_EEADR
+    MOVFW WRITE_EEADR
+    MOVWF LOGREAD_EEADR
     
-    ;now we must ***increase*** eeadr by 4*LOG_COUNT, as this correlates with an equal movement of CUR_LOG_ENTRY
-    ;eg, if CUR_LOG_ENTRY was 1, and goes to 4, and CUR_EEADR was 52, it should now move up by (4-1)*4=12 entries to 64.
-    ;this is a semi-dynamic array type structure.
-    RLF LOG_COUNT,W
-    MOVWF TEMP_REG
-    RLF TEMP_REG,W		;multiply LOG_COUNT by 4
-    ADDWF CUR_EEADR,F		;add LOG_COUNT*4 to CUR_EEADR
-    GOTO CountAdrDown.Validate
-    
-;if CUR_LOG_ENTRY!=0
-    DECF CUR_LOG_ENTRY,F
-    DECF CUR_LOG_ENTRY,F
-    DECF CUR_LOG_ENTRY,F
-    DECF CUR_LOG_ENTRY,F
-    
-    MOVLW .252
-    SUBWF CUR_EEADR,W
-    BTFSC STATUS,Z  ;if Z=set (WRITE_EEADR=252) then set WRITE_EEADR to 248 (skip invalid region)
-    MOVLW .248
-    MOVWF CUR_EEADR
-    ;note here we move down past the invalid region to .248, treating it as if it were not there
-    RETURN
-    
-CountAdrDown.Validate		;checks that the CUR_EEADR is valid, and moves it to a valid range if invalid 
-    MOVLW .252
-    SUBWF CUR_EEADR,W
-    BTFSC STATUS,Z  ;if Z=set (WRITE_EEADR=252) then set WRITE_EEADR to 0, (skip the invalid region)
-    CLRF CUR_EEADR  ;set WRITE_EEADR=0
-    ;note here, since we are moving up back to the top of our list, we move up over the invalid region, to 0
     RETURN
     
 ;-------------------------------------------------------------------------------    
 
-CountAdrUp			;increase the CUR_EEADR memory block, wrapping as needed
-    INCF CUR_LOG_ENTRY,F	;move one entry forward
-    INCF LOG_COUNT,W		;max value=LOG_COUNT+1
-    SUBWF CUR_LOG_ENTRY,W	; if W>f C=0
-    BTFSS STATUS,C		;if f>=LOG_COUNT+1 C=1 so skip the goto if CUR_LOG_ENTRY==LOG_COUNT+1
-    GOTO $+8			;if not LOG_COUNT (C=0), skip the next 7 lines
+CountAdrUp			;increase the LOGREAD_EEADR memory block, wrapping as needed
+    ;similarly for this function we want to move up until we exceede the max value.
+    ;since we move 1 block at a time, we can assume safely that if we exceede the max value,
+    ;we must loop back to the 0 value.
     
-;if CUR_LOG_ENTRY=LOG_COUNT+1
-    CLRF CUR_LOG_ENTRY		;if equal max (LOG_COUNT+1), wrap around to 1
-    INCF CUR_LOG_ENTRY,F		;set current entry to 1
+    INCF LOGREAD_EEADR,F
+    INCF LOGREAD_EEADR,F
+    INCF LOGREAD_EEADR,F
+    INCF LOGREAD_EEADR,F
+    ;if we have wrapped already (so all mem addresses are filled, don't worry about checking)
+    BTFSC EepromWrapped
+	RETURN
+	
+    MOVFW LOGREAD_EEADR
+    SUBWF WRITE_EEADR,W	    ;if W<=f, C=1 is desirable, C=0 is not
+    BTFSC STATUS,C
+    GOTO $+2
     
-    ;now we must ***decrease*** eeadr by 4*LOG_COUNT, as this correlates with an equal movement of CUR_LOG_ENTRY
-    ;eg, if CUR_LOG_ENTRY was 4, and goes to 1, and CUR_EEADR was 52, it should now move up by (4-1)*4 entries to 40.
-    ;this is a semi-dynamic array type structure.
-    RLF LOG_COUNT,W
-    MOVWF TEMP_REG
-    RLF TEMP_REG,W		;multiply LOG_COUNT by 4
-    SUBWF CUR_EEADR,F		;subtract LOG_COUNT*4 from CUR_EEADR
-    GOTO CountAdrUp.Validate
+    CLRF LOGREAD_EEADR	;is 1 greater, so points to zero
     
-;if CUR_LOG_ENTRY!=LOG_COUNT
-    INCF CUR_LOG_ENTRY,F
-    INCF CUR_LOG_ENTRY,F
-    INCF CUR_LOG_ENTRY,F
-    INCF CUR_LOG_ENTRY,F
-        
-    MOVLW .252
-    SUBWF CUR_EEADR,W
-    BTFSC STATUS,Z  ;if Z=set (WRITE_EEADR=252) then set WRITE_EEADR to 0, (skip the invalid region)
-    CLRF CUR_EEADR  ;set WRITE_EEADR=0
-    ;note here, since we are moving up back to the top of our list, we move up over the invalid region, to 0
-    RETURN
-    
-CountAdrUp.Validate		;checks that the CUR_EEADR is valid, and moves it to a valid range if invalid 
-    MOVLW .252
-    SUBWF CUR_EEADR,W
-    BTFSC STATUS,Z  ;if Z=set (WRITE_EEADR=252) then set WRITE_EEADR to 248 (skip invalid region)
-    MOVLW .248
-    MOVWF CUR_EEADR
-    ;note here we move down past the invalid region to .248, treating it as if it were not there
     RETURN
 
 ;-------------------------------------------------------------------------------    
-        
+;[not currently active]        
 CountHourDown			;count CUR_TIME_H down
     MOVLW .23			;handle the case where hours<0
     DECFSZ CUR_TIME_H,F		;set value to 23
@@ -724,7 +693,7 @@ CountHourDown			;count CUR_TIME_H down
     RETURN
     
 ;-------------------------------------------------------------------------------    
-
+;[not currently active]
 CountHourUp			;count CUR_TIME_H up
     INCF CUR_TIME_H,F		;inc hours
     
@@ -736,7 +705,7 @@ CountHourUp			;count CUR_TIME_H up
     RETURN
     
 ;-------------------------------------------------------------------------------    
-
+;[not currently active]
 CountMinuteDown			;count CUR_TIME_L down
     MOVLW .59			;handle the case where hours<0
     DECFSZ CUR_TIME_L,F		;set value to 23
@@ -746,7 +715,7 @@ CountMinuteDown			;count CUR_TIME_L down
     RETURN
     
 ;-------------------------------------------------------------------------------    
-
+;[not currently active]
 CountMinuteUp			;count CUR_TIME_L up
     INCF CUR_TIME_L,F		;inc minutes
     
@@ -1761,5 +1730,7 @@ lcd.setpos		;sets the LCD to LCD_POSITION
 StudentName	DA "  David Parker  ",0
 StudentNumber	DA "  213562404     ",0
 Writing		DA "Writing...",0    
-EndWriting		DA "          ",0    
+EndWriting	DA "          ",0
+Log		DA "LOG",0
+EndLog		DA "   ",0
     END
