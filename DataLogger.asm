@@ -109,6 +109,7 @@ Input2 res 1		    ;used as a generic input for multiple input functions
 W_TEMP res 1		    ;context saving 
 STATUS_TEMP res 1
 State_Timeout res 1	    ;a timeout for state transitions
+EepromReadOffset res 1	    ;offset for the eeprom read function to access using a struct
  
 RES_VECT  CODE    0x0000            ; processor reset vector
     GOTO    SETUP                   ; go to beginning of program
@@ -146,16 +147,17 @@ eeprom.store macro edata, eadr
     ENDM
 ;-------------------------------------------------------------------------------
 eeprom.access macro edata,eadr
-   BANKSEL EEADR
-   MOVLW eadr	
-   MOVWF EEADR		;read in DataAdr, eadr
+   MOVWF eadr		    ;start with our base pointer  
+   ADDWF EepromReadOffset   ;increase pointer by offset
+ BANKSEL EEADR
+   MOVWF EEADR		    ;read in DataAdr, eadr
    BANKSEL EECON1
-   BCF EECON1, EEPGD	;select data memory
-   BSF EECON1, RD	;start read data
+   BCF EECON1, EEPGD	    ;select data memory
+   BSF EECON1, RD	    ;start read data
    BANKSEL EEDAT
-   MOVFW EEDAT		;get data in
-   BANKSEL PORTC	;back to PORTC
-   MOVWF edata	;move data into edata
+   MOVFW EEDAT		    ;get data in
+   BANKSEL PORTC	    ;back to PORTC
+   MOVWF edata		    ;move data into edata
    
    ENDM
 ;-------------------------------------------------------------------------------
@@ -232,7 +234,7 @@ TMR0_ISR.end
     BCF INTCON,T0IF	    ;clear interrupt flag
     MOVLW .217				; configured for 10ms delay (256=65ms according to stopwatch)
     MOVWF TMR0
-    RETFIE
+    RETURN
 ;###END#OF#ISRs###
     
 ;*******************************************************************************
@@ -452,9 +454,9 @@ UpdateState
     
     ;reset timeout if a button is depressed(state=set)
     MOVLW TimeoutDelay	    
-    BTFSC DownButtonPending ;do next if set
+    BTFSC Button_Down.State ;do next if set
 	MOVWF State_Timeout
-    BTFSC UpButtonPending   ;do next if set
+    BTFSC Button_Up.State   ;do next if set
 	MOVWF State_Timeout
 
     
@@ -701,11 +703,16 @@ CountAdrDown			;decrease the LOGREAD_EEADR memory block, wrapping as needed
     SUBWF WRITE_EEADR,W	    ;if W>f, C=0
     BTFSC STATUS,C
     
-    GOTO $+3
+    GOTO $+7
     ;here we note that LOGREAD_EEADR > WRITE_EEADR, so it has wrapped around,
-    ;thus we set LOGREAD_EEADR to WRITE_EEADR
+    ;thus we set LOGREAD_EEADR to WRITE_EEADR-4 (last written entry)
+    ;since from the start WRITE_EEADR is always 4, this never produces an invalid state
     MOVFW WRITE_EEADR
     MOVWF LOGREAD_EEADR
+    DECF LOGREAD_EEADR,F
+    DECF LOGREAD_EEADR,F
+    DECF LOGREAD_EEADR,F
+    DECF LOGREAD_EEADR,F
     
     RETURN
     
@@ -727,11 +734,13 @@ CountAdrUp			;increase the LOGREAD_EEADR memory block, wrapping as needed
 	RETURN
 	
     MOVFW LOGREAD_EEADR
-    SUBWF WRITE_EEADR,W	    ;if W<=f, C=1 is desirable, C=0 is not
-    BTFSC STATUS,C
+    SUBWF WRITE_EEADR,W	    ;if W<f, C=0  this is desirable ( C=1 is not )
+    ;note, < not <=, since we WRITE_EEADR is not populated, but rather the pointer
+    ;for the next address to populate
+    BTFSS STATUS,C
     GOTO $+2
     
-    CLRF LOGREAD_EEADR	;is 1 greater, so points to zero
+    CLRF LOGREAD_EEADR	;undesirable state, so clear value to 0 entry (wrap around)
     
     RETURN
 
@@ -788,15 +797,15 @@ CountMinuteUp			;count CUR_TIME_L up
 ; EEPROM.read
 ;*******************************************************************************
 eeprom.read
-    ;load in our CUR_TIME_H, CUR_TIME_L, CUR_HUMIDITY, CUR_TEMPERATURE
-    eeprom.access CUR_TIME_H,LOGREAD_EEADR
-    DECF LOGREAD_EEADR,F
-    eeprom.access CUR_TIME_L,LOGREAD_EEADR
-    DECF LOGREAD_EEADR,F
-    eeprom.access CUR_HUMIDITY,LOGREAD_EEADR
-    DECF LOGREAD_EEADR,F
+    ;load in our CUR_TEMPERATURE, CUR_HUMIDITY, CUR_TIME_L, CUR_TIME_H
+    CLRF EepromReadOffset
     eeprom.access CUR_TEMPERATURE,LOGREAD_EEADR
-    DECF LOGREAD_EEADR,F
+    INCF EepromReadOffset,F
+    eeprom.access CUR_HUMIDITY,LOGREAD_EEADR
+    INCF EepromReadOffset,F
+    eeprom.access CUR_TIME_L,LOGREAD_EEADR
+    INCF EepromReadOffset,F
+    eeprom.access CUR_TIME_H,LOGREAD_EEADR
     
     RETURN
 ;*******************************************************************************
@@ -1494,7 +1503,7 @@ delay_10_ms
     ;goto=2 cyles, decfsz=1 cycle, if zero=2 cycles
     MOVLW .40
     MOVWF D2
-
+;	RETURN  ;for debugging to get through delays faster
 ;if innerloopnumber=82, total cycles=10082, which is close enough to 10ms
     MOVLW .83	;approx 1/4 ms
     MOVWF D1	
@@ -1777,7 +1786,8 @@ lcd.print.clock.log
 ;	a generic LCD print function that will print any ascii array
 ;*******************************************************************************
 ;inspired by this code http://www.microchip.com/forums/m90152.aspx
-lcd.printString	;prints a line of text     
+lcd.printString	;prints a line of text 
+    ;RETURN		;for debugging so the debugger doesn't get stuck
     BCF INTCON,GIE	;disable interrupts
     BANKSEL Input1
     MOVFW Input1
