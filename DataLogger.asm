@@ -482,10 +482,10 @@ UpdateState.SB1clear.SB2clear	;aka s1
     ;...........................................................................
     ;up/down press to move to s2
     ;...........................................................................
+    
 ;DOWN BUTTON TEST
-
     BTFSS DownButtonPending		    ;if pressed transition to s2 
-    GOTO $+7	; not pressed, don't transition
+    GOTO $+8	; not pressed, don't transition
     
     ;button pressed
     BCF DownButtonPending		    ;register that button press was read
@@ -495,11 +495,12 @@ UpdateState.SB1clear.SB2clear	;aka s1
     CALL CountAdrDown			    ;count our address down, dealing with wrapping   
 
     BSF StateBit2			    ;move to s2
+    CALL lcd.debug.s2			    ;show we are in s2
     BSF StateRefreshLCD			    ;flag lcd to update accoring to new state
     
 ;UP BUTTON TEST
     BTFSS UpButtonPending		    ;if pressed transition to s2 
-    GOTO $+7	; not pressed, don't transition
+    GOTO $+8	; not pressed, don't transition
     
     ;button pressed
     BCF UpButtonPending			    ;register that button press was read
@@ -510,6 +511,7 @@ UpdateState.SB1clear.SB2clear	;aka s1
     
     
     BSF StateBit2			    ;move to s2
+    CALL lcd.debug.s2			    ;show we are in s2
     BSF StateRefreshLCD			    ;flag lcd to update accoring to new state
     
     RETURN
@@ -532,7 +534,6 @@ UpdateState.SB1clear.SB2clear	;aka s1
 ;-------------------------------------------------------------------------------    
 UpdateState.SB1clear.SB2set	;aka s2
     ;s2 tasks:
-    
     ;...........................................................................
     ;	timeout for transition back to current
     ;...........................................................................
@@ -540,9 +541,10 @@ UpdateState.SB1clear.SB2set	;aka s2
     ;TIMEOUT TEST
     MOVFW State_Timeout
     BTFSS STATUS,Z
-    GOTO $+5			;if not zero skip over
+    GOTO $+6			;if not zero skip over
     
     BCF StateBit2		;if zero, goto s1
+    CALL lcd.debug.s1		;show we are in state1 now
     BSF StateRefreshLCD		;flag lcd to update accoring to new state
     BSF ClockRedrawFlag		;flag clock to be redrawn
 	RETURN			;no need to check anything more
@@ -1549,13 +1551,13 @@ BintoCHAR
 
 ;this controls whether it is data or command
 lcd.data
-    CALL delay_10_ms
     BSF PORTC,LCD_RS			    ;set to data mode
-    GOTO $+3
+    GOTO $+2
 lcd.command
-    CALL delay_10_ms
     BCF PORTC,LCD_RS			    ;set to command mode
 ;part below this is the write part of lcd.data and lcd.command
+    
+    CALL delay_5_ms
     
     SWAPF LCD_BUFFER,W		    ;move LCD_BUFFER<4:7> to W<0:3>
     CALL lcd.write			    ;write W<0:3> to LCD<4:7>
@@ -1893,6 +1895,22 @@ lcd.setpos		;sets the LCD to LCD_POSITION
     MOVWF LCD_BUFFER
     BSF LCD_BUFFER,7	;1,LCD_POSITION
     CALL lcd.command	;sends location command (set address=LCD_POSITION)
+    RETURN
+    
+lcd.debug.s2
+    MOVLW 0x0F
+    MOVWF LCD_POSITION
+    MOVLW 'L'
+    MOVWF LCD_BUFFER
+    CALL lcd.writepos
+    RETURN
+    
+lcd.debug.s1
+    MOVLW 0x0F
+    MOVWF LCD_POSITION
+    MOVLW 'R'
+    MOVWF LCD_BUFFER
+    CALL lcd.writepos
     RETURN
 ;###END#OF#CALL###
 
