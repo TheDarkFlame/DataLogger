@@ -14,7 +14,7 @@
 ;                RB5        =Humidity sensor                                   *    
 ;                RA0        =ButtonDown	                                       *    
 ;                RA1        =ButtonUp	                                       *    
-;                RB7        =ButtonMode		                               *    
+;                RB7        =	                               *    
 ;                RA2        =RTC CE pin	                                       *    
 ;                RC5        =RTC IO pin	                                       *    
 ;                RC0        =RTC SCLK pin	                               *    
@@ -35,19 +35,16 @@
 #define LCD_E	7		
 #define Button_Down PORTA,0
 #define Button_Up PORTA,1
-#define Button_Mode PORTA,2
 #define Button_Down.State STATE,0
 #define Button_Up.State STATE,1
-#define Button_Mode.State STATE, 2
 #define RTC_CE PORTA,2
 #define RTC_IO PORTC,5
 #define RTC_SCLK PORTC,0
 #define StateBit1 STATE,3
-#define StateBit2 STATE,4
+;#define StateBit2 STATE,4
 #define TimeoutDelay .3
 #define DownButtonPending STATE,5
 #define UpButtonPending STATE,6
-#define ModeButtonPending STATE,7
 #define ClockRedrawFlag STATE2,0
 #define ResampleFlag STATE2,1
 #define LogDataFlag STATE2,2
@@ -75,12 +72,12 @@ LCD_POSITION res 1	    ;for writing to a specific LCD position defined in code
 STATE res 1		    ;state register
 ;-------x		    ;button_up state 0=released 1=pressed
 ;------x-		    ;button_down state 0=released 1=pressed
-;-----x--		    ;button_mode state 0=released 1=pressed
+;-----o--		    ;-----------------------
 ;----x---		    ;FSM current state bit 1
-;---x----		    ;FSM current state bit 2
+;---o----		    ;-----------------------
 ;--x-----		    ;button_up press read
 ;-x------		    ;button_down press read
-;x-------		    ;button_mode state read
+;o-------		    ;-----------------------
 ;press read indicates a pending read on the button, cleared if no press or if read 
 STATE2 res 1		    ;a second state register
 ;-------x		    ;redraw clock on LCD, if set clock needs a redraw
@@ -101,8 +98,7 @@ TEMP_REG2 res 1		    ;temporary register
 CHAR_L res 1		    ;stores lowbyte ascii characters for write functions
 CHAR_H res 1		    ;stores highbyte ascii characters for write functions
 Button_Up_Counter res 1	    ;used for tracking up button state
-Button_Down_Counter res 1	    ;used for tracking down button state
-Button_Mode_Counter res 1	    ;used for tracking mode button state
+Button_Down_Counter res 1   ;used for tracking down button state
 Input1 res 1		    ;used as a generic input for multiple input functions
 Input2 res 1		    ;used as a generic input for multiple input functions
 W_TEMP res 1		    ;context saving 
@@ -169,8 +165,7 @@ TMR0_ISR	;happens once every 10ms
     ;------10MS ISR content start
     CALL Poll_Button_Up
     CALL Poll_Button_Down
-    CALL Poll_Button_Mode
-    ;CALL UpdateState
+    CALL UpdateState
     ;------10MS ISR content end
     DECFSZ TD1,F	    ;count down from 100 every 10ms
     GOTO $+2
@@ -370,12 +365,12 @@ UpdateState
 ;    STATE	res 1	    ;state register
 ;-------x		    ;button_up state 0=released 1=pressed
 ;------x-		    ;button_down state 0=released 1=pressed
-;-----x--		    ;button_mode state 0=released 1=pressed
+;-----x--		    ;
 ;----x---		    ;FSM current state bit 1
 ;---x----		    ;FSM current state bit 2
 ;--x-----		    ;button_up press read
 ;-x------		    ;button_down press read
-;x-------		    ;button_mode state read
+;x-------		    ;
     
     ;States:
     ;s1	display mode	-	current			    SB1=0 SB2=0
@@ -391,6 +386,7 @@ UpdateState
     ;	up/down press to scroll through log
     ;	timeout for transition back to current
     ;	}
+;[depreciated]
     ;if (s3<10>){
     ;	up/down press for changing hours
     ;	mode select press to go to s4
@@ -409,8 +405,7 @@ UpdateState
 	MOVWF State_Timeout
     BTFSC Button_Up.State   ;do next if set
 	MOVWF State_Timeout
-    BTFSC Button_Mode.State ;do next if set
-	MOVWF State_Timeout
+
     
     
     BTFSS StateBit1
@@ -466,18 +461,18 @@ UpdateState.SB1clear.SB2clear	;aka s1
     BSF StateBit2			    ;move to s2
     
     
-    ;...........................................................................
-    ;	mode select press to move to s3
-    ;...........................................................................
-    ;MODE BUTTON PRESSED
-    BTFSS ModeButtonPending		    ;if pressed do next
-    GOTO $+3   ;not pressed, don't transition
-    
-    ;button pressed
-    BCF ModeButtonPending		    ;register that button is pressed
-    BSF StateBit1			    ;goto s3
-    
-    RETURN
+;    ;...........................................................................
+;    ;	mode select press to move to s3
+;    ;...........................................................................
+;    ;MODE BUTTON PRESSED
+;    BTFSS ModeButtonPending		    ;if pressed do next
+;    GOTO $+3   ;not pressed, don't transition
+;    
+;    ;button pressed
+;    BCF ModeButtonPending		    ;register that button is pressed
+;    BSF StateBit1			    ;goto s3
+;    
+;    RETURN
 
     
     
@@ -551,15 +546,15 @@ UpdateState.SB1set.SB2clear	;aka s3
     ;
     ;
     
-    ;...........................................................................
-    ;	mode select press to go to s4
-    ;...........................................................................
-    BTFSS ModeButtonPending		    ;if pressed dec hours 
-    GOTO $+3	; not pressed, do nothing
-    
-    BCF ModeButtonPending
-    ;move to state s4
-    BSF StateBit2
+;    ;...........................................................................
+;    ;	mode select press to go to s4
+;    ;...........................................................................
+;    BTFSS ModeButtonPending		    ;if pressed dec hours 
+;    GOTO $+3	; not pressed, do nothing
+;    
+;    BCF ModeButtonPending
+;    ;move to state s4
+;    BSF StateBit2
     
     
     ;...........................................................................
@@ -606,16 +601,16 @@ UpdateState.SB1set.SB2set	;aka s4
     
     
     
-    ;...........................................................................
-    ;	mode select press to reset and go to s1
-    ;...........................................................................
-    BTFSS ModeButtonPending
-    GOTO $+4
-    
-    BCF ModeButtonPending
-    ;do a rtc write
-    BCF StateBit1		;move to s1
-    BCF StateBit2
+;    ;...........................................................................
+;    ;	mode select press to reset and go to s1
+;    ;...........................................................................
+;    BTFSS ModeButtonPending
+;    GOTO $+4
+;    
+;    BCF ModeButtonPending
+;    ;do a rtc write
+;    BCF StateBit1		;move to s1
+;    BCF StateBit2
     
     
     ;...........................................................................
@@ -998,17 +993,6 @@ ButtonDown.OnPress
     
     RETURN
     
-ButtonMode.OnPress
-    BSF ModeButtonPending
-    
-    MOVLW 'M'		;debugging, we are in state 1
-    MOVWF LCD_BUFFER
-    MOVLW 0x0F
-    MOVWF LCD_POSITION
-    CALL lcd.writepos
-    
-    RETURN
-
 ButtonUp.OnRelease
 
     MOVLW ' '		;debugging, we are in state 1
@@ -1029,15 +1013,6 @@ ButtonDown.OnRelease
     
     RETURN
     
-    MOVLW ' '		;debugging, we are in state 1
-    MOVWF LCD_BUFFER
-    MOVLW 0x0F
-    MOVWF LCD_POSITION
-    CALL lcd.writepos
-    
-ButtonMode.OnRelease
-    
-    RETURN
 ;###END#OF#CALL###
     
     
@@ -1196,85 +1171,7 @@ Poll_Button_Down.End
     RETURN
     
 ;###END#OF#CALL###								
-
-;*******************************************************************************
-;Poll_Button_Mode	    ;checks port for a logical low
-;		     primarily behaves like a set of nested if statements
-;*******************************************************************************
-Poll_Button_Mode    
-    
-    BTFSS   Button_Mode.State		;LSB=0 button released| LSB=1, button pressed
-    GOTO    Poll_Button_Mode.ReleasedState
-    GOTO    Poll_Button_Mode.PressedState
-    
-;============
-;State Released SUBCALL
-;============
-    ;check if button is pressed or released currently
-Poll_Button_Mode.ReleasedState    
-    BTFSS Button_Mode	    		;check RB7, if RB7=0 button=pressed, count
-								;if RB7=1 button=released, clear count
-    GOTO Poll_Button_Mode.ReleasedState.Pressed
-    GOTO Poll_Button_Mode.ReleasedState.Released
-    
-Poll_Button_Mode.ReleasedState.Pressed
-    INCF Button_Mode_Counter,F
-;<check for counter=4, if 4, then inc cur_num and reset counter as needed>
-    BTFSS Button_Mode_Counter,2	;.4 = b'00000100'
-    GOTO Poll_Button_Mode.End 	;if !=4, exit the poll
-    
-    CLRF Button_Mode_Counter	    ;clear the cur_num
-    BSF Button_Mode.State	    	;change status to Pressed (1)
-    
-    ;---------------
-    ;conditional stuff for when our button is pressed
-    CALL ButtonMode.OnPress 
-    ;---------------
-    
-    GOTO Poll_Button_Mode.End
-    
-Poll_Button_Mode.ReleasedState.Released
-    CLRF Button_Mode_Counter
-    GOTO Poll_Button_Mode.End
-    
-;%%%%END%OF%SUBCALL%%%%
-    
-
-;============
-;State Pressed SUBCALL
-;============
-    ;check if button is pressed or released currently    
-Poll_Button_Mode.PressedState    
-    BTFSS PORTA,0	    		;check RA0, if RA0=0 button=pressed, count
-								;if RA0=1 button=released, clear count
-    GOTO Poll_Button_Mode.PressedState.Pressed
-    GOTO Poll_Button_Mode.PressedState.Released
-    
-    
-Poll_Button_Mode.PressedState.Released
-    INCF Button_Mode_Counter,F
-;<check for counter=4, if 4, then inc cur_num and reset counter as needed>
-    BTFSS Button_Mode_Counter,2  	;.4 = b'00000100'
-    GOTO Poll_Button_Mode.End 	;if !=4, exit the poll
-    
-    CLRF Button_Mode_Counter	    ;clear the cur_num
-    BCF Button_Mode.State	    	;change status to Released (0)
-    CALL ButtonMode.OnRelease
-    GOTO Poll_Button_Mode.End
-    
-    
-Poll_Button_Mode.PressedState.Pressed
-    CLRF Button_Mode_Counter
-    GOTO Poll_Button_Mode.End
-    
-;%%%%END%OF%SUBCALL%%%%
-    
-Poll_Button_Mode.End
-    RETURN
-    
-;###END#OF#CALL###    
-    
-    
+   
 ;*******************************************************************************
 ;	Update Clock - keeps the clock on track of the time since startup
 ;*******************************************************************************
