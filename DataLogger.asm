@@ -49,10 +49,12 @@
 #define UpButtonPending STATE,6
 #define ModeButtonPending STATE,7
 #define ClockRedrawFlag STATE2,0
- 
+#define ResampleFlag STATE2,1
+#define LogDataFlag STATE2,2
+#define EepromWrapped STATE2,3 
 ;REGISTERS
 variables udata
-READ_EEADR   res 1	    ;stores value of latest written EEADR + 1 (for cycling through EEDAT)
+WRITE_EEADR   res 1	    ;stores value of latest written EEADR + 1 (for cycling through EEDAT)
 READ_TEMPERATURE res 1	    ;stores last temperature we read from the sensor
 READ_HUMIDITY	res 1	    ;stores last humidity we read from the sensor
 READ_TIME_L  res 1	    ;stores minutes we last read from the RTC
@@ -82,7 +84,9 @@ STATE res 1		    ;state register
 ;press read indicates a pending read on the button, cleared if no press or if read 
 STATE2 res 1		    ;a second state register
 ;-------x		    ;redraw clock on LCD, if set clock needs a redraw
-;------x-
+;------x-		    ;take sample of the inputs (humidity temp, etc) and update lcd
+;-----x--		    ;store the current samples in eeprom
+;----x---		    ;eeprom wrapped around - set if eeprom has wrapped at least once
 CLOCK_MINUTES res 1	    ;system timer (minutes)
 CLOCK_HOURS res 1	    ;system timer (hours)
 D1  res 1		    ;delay register 1
@@ -115,7 +119,7 @@ RES_VECT  CODE    0x0000            ; processor reset vector
 eeprom.store macro edata, eadr
  ;does the eeprom store command, simple saves "edata" into "eadr" in eeprom
     BANKSEL eadr
-    MOVFW eadr ;move READ_EEADR into W
+    MOVFW eadr ;move WRITE_EEADR into W
     BANKSEL EEADR
     MOVWF EEADR	    ;move W into EEADR
     BANKSEL PORTC
@@ -145,18 +149,23 @@ eeprom.store macro edata, eadr
 ; ISRs
 ;*******************************************************************************
 ISR       CODE    0x0004    ;interrupts start at 0x0004
+    BANKSEL W_TEMP 
     MOVWF W_TEMP	    ;context saving
     
-    BTFSC INTCON,T0IF	 				 
+    BTFSC INTCON,T0IF	 				
+    
     CALL TMR0_ISR	    ; check if ISR is for TMR0	 
     
+    BANKSEL W_TEMP
     MOVFW W_TEMP	    ;context saving
+    BANKSEL 0x00
     RETFIE
 ;end ISR
     
     
 TMR0_ISR	;happens once every 10ms
-;    GOTO TMR0_ISR.end
+    BANKSEL 0x00
+    ;    GOTO TMR0_ISR.end
     ;------10MS ISR content start
     CALL Poll_Button_Up
     CALL Poll_Button_Down
@@ -172,9 +181,8 @@ TMR0_ISR.1sec		    ;happens once every 1sec
     MOVLW .100		    ;reset count for 1 sec
     MOVWF TD1
     ;------1SEC ISR content start
+    BSF ResampleFlag	    ;we need to take new samples and update the display
     DECF State_Timeout,F    ;for state transitioning
-    CALL SampleData	    ;get data
-    CALL lcd.print.lastsample	    ;display data
     ;------1SEC ISR content end    
     DECFSZ TD2,F	    ;count down from 60 every 1 sec
     GOTO $+2
@@ -196,9 +204,7 @@ TMR0_ISR.5min		    ;happens every 5 min
     MOVLW .5		    ;reset count for 5 min
     MOVWF TD3
     ;------1MIN ISR content start
-    CALL SampleData	    ;get data
-    CALL lcd.print.lastsample	    ;display data
-;    CALL eeprom.write	    ;store data
+    BSF LogDataFlag
     ;------1MIN ISR content end
     GOTO  TMR0_ISR.end	    ;goto ISR.end
     
@@ -261,7 +267,7 @@ SETUP
     CALL lcd.command		    ;send command
     
     CALL delay_10_ms
-    MOVLW b'00101111'		    ;4bit, 2 lines,5x11dots
+    MOVLW b'00101011'		    ;4bit, 2 lines,5x8dots
     MOVWF LCD_BUFFER		    ;move command into buffer
     CALL lcd.command		    ;send command
     
@@ -304,7 +310,8 @@ SETUP
     BANKSEL LOG_COUNT
     CLRF LOG_COUNT
     CLRF CLOCK_HOURS
-    
+    CLRF STATE2			;defaults=0
+    CLRF WRITE_EEADR
     CLRF CLOCK_MINUTES	
     COMF CLOCK_MINUTES,F	;set such that the first interrupt will set it to zero
     
@@ -322,21 +329,38 @@ SETUP
     BSF INTCON, GIE			;enable global interrupts
 
     
-    
-    
-    
+;>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>    
+;<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+;>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
 START
     
-    BTFSS ClockRedrawFlag	;if set then redraw clock
+    BTFSS ClockRedrawFlag	;if set then redraw clock (once a minute)
     GOTO $+5			;if not set,skip redraw
     
 	MOVLW 0x05
 	MOVWF LCD_POSITION
 	CALL lcd.print.clock
-	BCF ClockRedrawFlag	;clear the flag
+	BCF ClockRedrawFlag	;clear  flag
+    
+    BTFSS ResampleFlag		;if set then take new samples (once a second)
+    GOTO $+4			;if not set, then skip sampling
+    
+	CALL SampleData			    ;get data
+	CALL lcd.print.lastsample	    ;display data
+	BCF ResampleFlag	;clear flag
+	
+    BTFSS LogDataFlag
+    GOTO $+4
+	CALL eeprom.write	;if set then write latest samples to memory
+	BCF LogDataFlag		;clear flag
+    
     
     GOTO START
 
+;>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>    
+;<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+;>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
 
 ;*******************************************************************************
@@ -419,7 +443,7 @@ UpdateState.SB1clear.SB2clear	;aka s1
     BCF DownButtonPending		    ;register that button press was read
     
     
-    MOVFW READ_EEADR			    ;the address we will store next sample to
+    MOVFW WRITE_EEADR			    ;the address we will store next sample to
     MOVWF CUR_EEADR			    ;set our new display value as sample value
     
     MOVFW LOG_COUNT			    ;set our mem read value = latest log,
@@ -636,7 +660,7 @@ CountAdrDown			;decrease the CUR_EEADR memory block, wrapping as needed
     
     MOVLW .252
     SUBWF CUR_EEADR,W
-    BTFSC STATUS,Z  ;if Z=set (READ_EEADR=252) then set READ_EEADR to 248 (skip invalid region)
+    BTFSC STATUS,Z  ;if Z=set (WRITE_EEADR=252) then set WRITE_EEADR to 248 (skip invalid region)
     MOVLW .248
     MOVWF CUR_EEADR
     ;note here we move down past the invalid region to .248, treating it as if it were not there
@@ -645,8 +669,8 @@ CountAdrDown			;decrease the CUR_EEADR memory block, wrapping as needed
 CountAdrDown.Validate		;checks that the CUR_EEADR is valid, and moves it to a valid range if invalid 
     MOVLW .252
     SUBWF CUR_EEADR,W
-    BTFSC STATUS,Z  ;if Z=set (READ_EEADR=252) then set READ_EEADR to 0, (skip the invalid region)
-    CLRF CUR_EEADR  ;set READ_EEADR=0
+    BTFSC STATUS,Z  ;if Z=set (WRITE_EEADR=252) then set WRITE_EEADR to 0, (skip the invalid region)
+    CLRF CUR_EEADR  ;set WRITE_EEADR=0
     ;note here, since we are moving up back to the top of our list, we move up over the invalid region, to 0
     RETURN
     
@@ -680,15 +704,15 @@ CountAdrUp			;increase the CUR_EEADR memory block, wrapping as needed
         
     MOVLW .252
     SUBWF CUR_EEADR,W
-    BTFSC STATUS,Z  ;if Z=set (READ_EEADR=252) then set READ_EEADR to 0, (skip the invalid region)
-    CLRF CUR_EEADR  ;set READ_EEADR=0
+    BTFSC STATUS,Z  ;if Z=set (WRITE_EEADR=252) then set WRITE_EEADR to 0, (skip the invalid region)
+    CLRF CUR_EEADR  ;set WRITE_EEADR=0
     ;note here, since we are moving up back to the top of our list, we move up over the invalid region, to 0
     RETURN
     
 CountAdrUp.Validate		;checks that the CUR_EEADR is valid, and moves it to a valid range if invalid 
     MOVLW .252
     SUBWF CUR_EEADR,W
-    BTFSC STATUS,Z  ;if Z=set (READ_EEADR=252) then set READ_EEADR to 248 (skip invalid region)
+    BTFSC STATUS,Z  ;if Z=set (WRITE_EEADR=252) then set WRITE_EEADR to 248 (skip invalid region)
     MOVLW .248
     MOVWF CUR_EEADR
     ;note here we move down past the invalid region to .248, treating it as if it were not there
@@ -747,57 +771,54 @@ CountMinuteUp			;count CUR_TIME_L up
 ; EEPROM.write 
 ;*******************************************************************************
 eeprom.write
-    ;increment log count, if f=63, do not increase
-    INCF LOG_COUNT,F
-    MOVLW .64		;if W>f, C=0
-    SUBWF LOG_COUNT,W
-    BTFSC STATUS,C
-    DECF LOG_COUNT,F	;if not (0.64>f), then decrement f (so keep f=.63)
-    
-    
+    ;note storage order from lowest index to highest:
+    ;temperature,humidity,minutes,hours
     BANKSEL INTCON
     BCF INTCON, GIE ;disable interrupts
-    ;EEDATA structure:
-    ;0->251 =	log
-    ;		252=READ_EEADR  address accessed
-    ;		253=LOG_COUNT  number of entries in storage (max=63)
-    
     BANKSEL 0x00    ;move to bank0
     
-;check here if the value is 252, if 252, reset to 0
-    MOVLW .252
-    SUBWF READ_EEADR,W
-    BTFSC STATUS,Z  ;if Z=set (READ_EEADR=252) then set READ_EEADR to 0
-    CLRF READ_EEADR  ;set READ_EEADR=0
+    ;note that the WRITE_EEADR will just wrap around past 255 back to 0 as we go
 
-    
 ;store temperature
-    eeprom.store READ_TEMPERATURE, READ_EEADR    ;writes READ_TEMPERATURE to READ_EEADR
-    INCF READ_EEADR,F
+    eeprom.store READ_TEMPERATURE, WRITE_EEADR    ;writes READ_TEMPERATURE to WRITE_EEADR
+    INCF WRITE_EEADR,F
     
+    BANKSEL INTCON
+    BSF INTCON, GIE ;enable interrupts so timing may be affected as little as possible
+    nop
+    BCF INTCON, GIE ;disable interrupts
+    BANKSEL 0x00
+
 ;store humidity
-    eeprom.store READ_HUMIDITY, READ_EEADR    ;writes READ_HUMIDITY to READ_EEADR
-    INCF READ_EEADR,F
+    eeprom.store READ_HUMIDITY, WRITE_EEADR    ;writes READ_HUMIDITY to WRITE_EEADR
+    INCF WRITE_EEADR,F
     
+    BANKSEL INTCON
+    BSF INTCON, GIE ;enable interrupts so timing may be affected as little as possible
+    nop
+    BCF INTCON, GIE ;disable interrupts
+    BANKSEL 0x00
+
 ;store minutes
-    eeprom.store READ_TIME_L, READ_EEADR    ;writes READ_TIME_L to READ_EEADR
-    INCF READ_EEADR,F
+    eeprom.store CLOCK_MINUTES, WRITE_EEADR    ;writes CLOCK_MINUTES to WRITE_EEADR
+    INCF WRITE_EEADR,F
+
+    BANKSEL INTCON
+    BSF INTCON, GIE ;enable interrupts so timing may be affected as little as possible
+    nop
+    BCF INTCON, GIE ;disable interrupts
+    BANKSEL 0x00
     
 ;store hours
-    eeprom.store READ_TIME_H, READ_EEADR    ;writes READ_TIME_H to READ_EEADR
-    INCF READ_EEADR,F  
+    eeprom.store CLOCK_HOURS, WRITE_EEADR    ;writes CLOCK_HOURS to WRITE_EEADR
+    INCF WRITE_EEADR,F  
     
-;store current address
-    MOVLW .252
-    MOVWF TEMP_REG
-    eeprom.store READ_EEADR,TEMP_REG    ;writes READ_EEADR to .252
-    
-;store number of entries
-    MOVLW .253
-    MOVWF TEMP_REG
-    eeprom.store LOG_COUNT,TEMP_REG    ;writes READ_EEADR to .252
-    
+    MOVFW WRITE_EEADR
+    BTFSC STATUS,Z	    ;if our number is now zero, we have wrapped around 
+	BSF EepromWrapped   ;if zero set then set wrapped true
+    BANKSEL INTCON
     BSF INTCON, GIE ;enable interrupts
+    
     RETURN
 ;###END#OF#CALL###
     
@@ -1809,5 +1830,5 @@ lcd.setpos		;sets the LCD to LCD_POSITION
 ;LCD ascii arrays:    
 StudentName	DA "  David Parker  ",0
 StudentNumber	DA "  213562404     ",0
-    
+Writing		DA "Writing",0    
     END
