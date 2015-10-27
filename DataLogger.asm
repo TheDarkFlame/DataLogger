@@ -50,6 +50,7 @@
 #define LogDataFlag STATE2,2
 #define EepromWrapped STATE2,3 
 #define StateRefreshLCD STATE2,4
+#define EepromReadData STATE2,5
  
  ;REGISTERS
 variables udata
@@ -87,6 +88,7 @@ STATE2 res 1		    ;a second state register
 ;-----x--		    ;store the current samples in eeprom
 ;----x---		    ;eeprom wrapped around - set if eeprom has wrapped at least once
 ;---x----		    ;state updated, refresh LCD flag
+;--x-----		    ;set if we need to read new eeprom data to display
 CLOCK_MINUTES res 1	    ;system timer (minutes)
 CLOCK_HOURS res 1	    ;system timer (hours)
 D1  res 1		    ;delay register 1
@@ -105,6 +107,7 @@ Button_Down_Counter res 1   ;used for tracking down button state
 Input1 res 1		    ;used as a generic input for multiple input functions
 Input2 res 1		    ;used as a generic input for multiple input functions
 W_TEMP res 1		    ;context saving 
+STATUS_TEMP res 1
 State_Timeout res 1	    ;a timeout for state transitions
  
 RES_VECT  CODE    0x0000            ; processor reset vector
@@ -142,22 +145,41 @@ eeprom.store macro edata, eadr
     
     ENDM
 ;-------------------------------------------------------------------------------
+eeprom.access macro edata,eadr
+   BANKSEL EEADR
+   MOVLW eadr	
+   MOVWF EEADR		;read in DataAdr, eadr
+   BANKSEL EECON1
+   BCF EECON1, EEPGD	;select data memory
+   BSF EECON1, RD	;start read data
+   BANKSEL EEDAT
+   MOVFW EEDAT		;get data in
+   BANKSEL PORTC	;back to PORTC
+   MOVWF edata	;move data into edata
+   
+   ENDM
+;-------------------------------------------------------------------------------
 ;###END#OF#MACROS###
     
 ;*******************************************************************************
 ; ISRs
 ;*******************************************************************************
 ISR       CODE    0x0004    ;interrupts start at 0x0004
-    BANKSEL W_TEMP 
     MOVWF W_TEMP	    ;context saving
+    SWAPF STATUS,W
+    CLRF STATUS
+    MOVWF STATUS_TEMP
     
     BTFSC INTCON,T0IF	 				
     
     CALL TMR0_ISR	    ; check if ISR is for TMR0	 
     
-    BANKSEL W_TEMP
-    MOVFW W_TEMP	    ;context saving
-    BANKSEL 0x00
+    SWAPF STATUS_TEMP,W
+    
+    MOVWF STATUS
+    SWAPF W_TEMP,F
+    SWAPF W_TEMP,W
+   
     RETFIE
 ;end ISR
     
@@ -332,28 +354,54 @@ SETUP
 ;>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
 START
+    BTFSS EepromReadData
+    GOTO $+5
+	BSF StateRefreshLCD
+	BSF ClockRedrawFlag
+	CALL eeprom.read	;update all our values to the read values
+	BCF EepromReadData
+    
+    
     
     BTFSS ClockRedrawFlag	;if set then redraw clock (once a minute)
-    GOTO $+5			;if not set,skip redraw
+    GOTO $+9			;if not set,skip redraw
     
 	MOVLW 0x05
 	MOVWF LCD_POSITION
-	CALL lcd.print.clock
+	BTFSS StateBit2		;if set we are in s2
+	    GOTO $+3
+	    CALL lcd.print.clock.log
+	    GOTO $+2
+	    CALL lcd.print.clock
+	
 	BCF ClockRedrawFlag	;clear  flag
     
+	
+	
     BTFSS ResampleFlag		;if set then take new samples (once a second)
     GOTO $+4			;if not set, then skip sampling
     
 	CALL SampleData			    ;get data
-	CALL lcd.print.lastsample	    ;display data
-	BCF ResampleFlag	;clear flag
+	BSF StateRefreshLCD		    ;try to display new data
+	BCF ResampleFlag		    ;clear flag
+
+
 	
+    BTFSS StateRefreshLCD	;if set refresh lcd
+    GOTO $+7
+    BTFSS StateBit2		;if set we are in s2, so do an lcd draw
+	GOTO $+3
+	CALL lcd.print.log
+	GOTO $+2
+	CALL lcd.print.lastsample
+	BCF StateRefreshLCD
+	
+	
+    
     BTFSS LogDataFlag
     GOTO $+3
 	CALL eeprom.write	;if set then write latest samples to memory
 	BCF LogDataFlag		;clear flag
-    
-    
     GOTO START
 
 ;>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>    
@@ -404,9 +452,9 @@ UpdateState
     
     ;reset timeout if a button is depressed(state=set)
     MOVLW TimeoutDelay	    
-    BTFSC Button_Down.State ;do next if set
+    BTFSC DownButtonPending ;do next if set
 	MOVWF State_Timeout
-    BTFSC Button_Up.State   ;do next if set
+    BTFSC UpButtonPending   ;do next if set
 	MOVWF State_Timeout
 
     
@@ -462,7 +510,7 @@ UpdateState.SB1clear.SB2clear	;aka s1
     BSF StateBit2			    ;move to s2
     BSF StateRefreshLCD			    ;flag lcd to update accoring to new state
     
-    
+    RETURN
 ;    ;...........................................................................
 ;    ;	mode select press to move to s3
 ;    ;...........................................................................
@@ -494,6 +542,7 @@ UpdateState.SB1clear.SB2set	;aka s2
     
     BCF StateBit2		;if zero, goto s1
     BSF StateRefreshLCD		;flag lcd to update accoring to new state
+    BSF ClockRedrawFlag		;flag clock to be redrawn
     RETURN			;no need to check anything more
     
     ;...........................................................................
@@ -641,6 +690,8 @@ CountAdrDown			;decrease the LOGREAD_EEADR memory block, wrapping as needed
     DECF LOGREAD_EEADR,F
     DECF LOGREAD_EEADR,F
     DECF LOGREAD_EEADR,F
+    
+    BSF EepromReadData
     ;if we have wrapped (all memory addresses are filled, then the address is valid)
     BTFSC EepromWrapped
 	RETURN		;if wrapped, then return
@@ -669,6 +720,8 @@ CountAdrUp			;increase the LOGREAD_EEADR memory block, wrapping as needed
     INCF LOGREAD_EEADR,F
     INCF LOGREAD_EEADR,F
     INCF LOGREAD_EEADR,F
+    
+    BSF EepromReadData
     ;if we have wrapped already (so all mem addresses are filled, don't worry about checking)
     BTFSC EepromWrapped
 	RETURN
@@ -731,6 +784,21 @@ CountMinuteUp			;count CUR_TIME_L up
 ;###END#OF#CALL###
  
     
+;*******************************************************************************
+; EEPROM.read
+;*******************************************************************************
+eeprom.read
+    ;load in our CUR_TIME_H, CUR_TIME_L, CUR_HUMIDITY, CUR_TEMPERATURE
+    eeprom.access CUR_TIME_H,LOGREAD_EEADR
+    DECF LOGREAD_EEADR,F
+    eeprom.access CUR_TIME_L,LOGREAD_EEADR
+    DECF LOGREAD_EEADR,F
+    eeprom.access CUR_HUMIDITY,LOGREAD_EEADR
+    DECF LOGREAD_EEADR,F
+    eeprom.access CUR_TEMPERATURE,LOGREAD_EEADR
+    DECF LOGREAD_EEADR,F
+    
+    RETURN
 ;*******************************************************************************
 ; EEPROM.write 
 ;*******************************************************************************
@@ -1575,6 +1643,61 @@ lcd.print.lastsample
 ;###END#OF#CALL###
     
 ;*******************************************************************************
+;	combines all LCD write functions into a formatted print
+;*******************************************************************************
+lcd.print.log
+    CALL lcd.home	;sends clear command
+    
+    MOVFW CUR_TEMPERATURE
+    CALL BINtoLCD	;outputs=BCD_H and BCD_L
+	MOVFW BCD_H
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;sends temp_10s to display
+    
+	MOVFW BCD_L
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;sends temp_1s to display
+	
+	MOVLW b'11011111'	;degrees symbol
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;text to display
+	
+	MOVLW 'C'
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;text to display
+    
+	MOVLW .255	;solid block
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;text to display
+    
+    CALL lcd.newline	;sends newline command (set address=40h)
+	
+    MOVFW CUR_HUMIDITY
+    CALL BINtoLCD	;outputs=BCD_H and BCD_L
+	MOVFW BCD_H
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;sends humidity_10s to display
+    
+	MOVFW BCD_L
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;sends humidity_1s to display
+	
+	MOVLW '%'	;degrees symbol
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;text to display
+	
+	MOVLW ' '	;space symbol
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;text to display
+    
+	MOVLW .255	;solid block
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;text to display
+    
+    RETURN
+;###END#OF#CALL###
+    
+;*******************************************************************************
 ;	function to redraw clock at LCD_POSITION (5 char long)
 ;*******************************************************************************
 lcd.print.clock   
@@ -1596,6 +1719,44 @@ lcd.print.clock
     CALL lcd.data
     
     MOVFW CLOCK_MINUTES 
+    CALL BINtoLCD	;gets clock minutes as 2 ascii characters
+    
+    MOVFW BCD_H
+    MOVWF LCD_BUFFER	;outputs 10's minutes
+    CALL lcd.data
+    
+    MOVFW BCD_L
+    MOVWF LCD_BUFFER	;outputs 1's minutes
+    CALL lcd.data
+    
+
+    
+    RETURN
+
+    
+;###END#OF#CALL###
+;*******************************************************************************
+;	function to redraw clock at LCD_POSITION (5 char long) for logs
+;*******************************************************************************
+lcd.print.clock.log   
+    CALL lcd.setpos	;sets LCD to LCD_POSITION
+    
+    MOVFW CUR_TIME_H 
+    CALL BINtoLCD	;gets clock hours as 2 ascii characters
+    
+    MOVFW BCD_H
+    MOVWF LCD_BUFFER	;outputs 10's hours
+    CALL lcd.data
+    
+    MOVFW BCD_L
+    MOVWF LCD_BUFFER	;outputs 1's hours
+    CALL lcd.data
+    
+    MOVLW ':'
+    MOVWF LCD_BUFFER	;outputs the divider symbol
+    CALL lcd.data
+    
+    MOVFW CUR_TIME_L 
     CALL BINtoLCD	;gets clock minutes as 2 ascii characters
     
     MOVFW BCD_H
