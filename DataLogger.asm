@@ -170,7 +170,7 @@ TMR0_ISR	;happens once every 10ms
     CALL Poll_Button_Up
     CALL Poll_Button_Down
     CALL Poll_Button_Mode
-    CALL UpdateState
+    ;CALL UpdateState
     ;------10MS ISR content end
     DECFSZ TD1,F	    ;count down from 100 every 10ms
     GOTO $+2
@@ -351,7 +351,7 @@ START
 	BCF ResampleFlag	;clear flag
 	
     BTFSS LogDataFlag
-    GOTO $+4
+    GOTO $+3
 	CALL eeprom.write	;if set then write latest samples to memory
 	BCF LogDataFlag		;clear flag
     
