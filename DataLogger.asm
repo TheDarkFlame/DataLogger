@@ -540,12 +540,12 @@ UpdateState.SB1clear.SB2set	;aka s2
     ;TIMEOUT TEST
     MOVFW State_Timeout
     BTFSS STATUS,Z
-    GOTO $+4			;if not zero skip over
+    GOTO $+5			;if not zero skip over
     
     BCF StateBit2		;if zero, goto s1
     BSF StateRefreshLCD		;flag lcd to update accoring to new state
     BSF ClockRedrawFlag		;flag clock to be redrawn
-    RETURN			;no need to check anything more
+	RETURN			;no need to check anything more
     
     ;...........................................................................
     ;	up/down press to scroll through log
