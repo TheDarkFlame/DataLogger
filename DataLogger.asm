@@ -779,6 +779,16 @@ eeprom.write
     
     ;note that the WRITE_EEADR will just wrap around past 255 back to 0 as we go
 
+    MOVLW 0x45
+    MOVWF LCD_POSITION		;set position under time
+    CALL lcd.setpos
+    
+    MOVLW LOW Writing
+    MOVWF Input1
+    MOVLW HIGH Writing		;print writing message
+    MOVWF Input2
+    CALL lcd.printString
+    
 ;store temperature
     eeprom.store READ_TEMPERATURE, WRITE_EEADR    ;writes READ_TEMPERATURE to WRITE_EEADR
     INCF WRITE_EEADR,F
@@ -818,6 +828,16 @@ eeprom.write
 	BSF EepromWrapped   ;if zero set then set wrapped true
     BANKSEL INTCON
     BSF INTCON, GIE ;enable interrupts
+    
+    MOVLW 0x45
+    MOVWF LCD_POSITION		;set position under time
+    CALL lcd.setpos
+    
+    MOVLW LOW EndWriting
+    MOVWF Input1
+    MOVLW HIGH EndWriting	;remove writing message
+    MOVWF Input2
+    CALL lcd.printString
     
     RETURN
 ;###END#OF#CALL###
@@ -1648,11 +1668,16 @@ lcd.print.lastsample
 	MOVFW BCD_L
 	MOVWF LCD_BUFFER
 	CALL lcd.data	;sends temp_1s to display
+	
 	MOVLW b'11011111'	;degrees symbol
 	MOVWF LCD_BUFFER
-	
 	CALL lcd.data	;text to display
+	
 	MOVLW 'C'
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;text to display
+    
+	MOVLW .255	;solid block
 	MOVWF LCD_BUFFER
 	CALL lcd.data	;text to display
     
@@ -1669,6 +1694,14 @@ lcd.print.lastsample
 	CALL lcd.data	;sends humidity_1s to display
 	
 	MOVLW '%'	;degrees symbol
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;text to display
+	
+	MOVLW ' '	;space symbol
+	MOVWF LCD_BUFFER
+	CALL lcd.data	;text to display
+    
+	MOVLW .255	;solid block
 	MOVWF LCD_BUFFER
 	CALL lcd.data	;text to display
     
@@ -1830,5 +1863,6 @@ lcd.setpos		;sets the LCD to LCD_POSITION
 ;LCD ascii arrays:    
 StudentName	DA "  David Parker  ",0
 StudentNumber	DA "  213562404     ",0
-Writing		DA "Writing",0    
+Writing		DA "Writing...",0    
+EndWriting		DA "          ",0    
     END
